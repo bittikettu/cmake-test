@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 project(HelloWorld)
 
 set(EXECUTABLE_NAME_GCOV "hello_gcov")
-set(EXECUTABLE_NAME_TEST "hello_gcov_test")
+set(EXECUTABLE_NAME_TEST "hello_test")
 
 add_executable(${EXECUTABLE_NAME_TEST} src/main.c src/funktiot.c unity/src/unity.c)
 
