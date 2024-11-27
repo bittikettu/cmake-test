@@ -19,12 +19,14 @@ void tearDown(void) {
 
 // A simple test case: testing an addition function
 void test_Addition(void) {
-  TEST_ASSERT_EQUAL_INT(15, add(global_number,5)); // Assert that result should be 15
+  TEST_ASSERT_EQUAL_INT(
+      15, add(global_number, 5)); // Assert that result should be 15
 }
 
 // A simple test case: testing subtraction
 void test_Subtraction(void) {
-  TEST_ASSERT_EQUAL_INT(5, subtract(global_number, 5)); // Assert that result should be 5
+  TEST_ASSERT_EQUAL_INT(
+      5, subtract(global_number, 5)); // Assert that result should be 5
 }
 
 // A test with failure
@@ -34,12 +36,12 @@ void test_FailingTest(void) {
 }
 
 void test_multiply(void) {
-  TEST_ASSERT_EQUAL_INT(50, multiply(global_number,5));
+  TEST_ASSERT_EQUAL_INT(50, multiply(global_number, 5));
 }
 
 void test_divide(void) {
-  TEST_ASSERT_EQUAL_INT(5, divide(global_number,2));
-  TEST_ASSERT_EQUAL_INT(0, divide(global_number,0));
+  TEST_ASSERT_EQUAL_INT(5, divide(global_number, 2));
+  TEST_ASSERT_EQUAL_INT(0, divide(global_number, 0));
 }
 // Main function that runs the tests
 int main(void) {

@@ -20,7 +20,9 @@ add_custom_target(format
 )
 
 add_custom_target(profile
-    COMMAND ${CMAKE_COMMAND} -E env LLVM_PROFILE_FILE=${EXECUTABLE_NAME_GCOV}.profraw ./${EXECUTABLE_NAME_GCOV} && llvm-profdata merge -sparse ${EXECUTABLE_NAME_GCOV}.profraw -o ${EXECUTABLE_NAME_GCOV}.profdata && llvm-cov report ./${EXECUTABLE_NAME_GCOV} -instr-profile=${EXECUTABLE_NAME_GCOV}.profdata --ignore-filename-regex="unity/src/*"
+    COMMAND ${CMAKE_COMMAND} -E env LLVM_PROFILE_FILE=${EXECUTABLE_NAME_GCOV}.profraw ./${EXECUTABLE_NAME_GCOV}
+    COMMAND llvm-profdata merge -sparse ${EXECUTABLE_NAME_GCOV}.profraw -o ${EXECUTABLE_NAME_GCOV}.profdata
+    COMMAND llvm-cov report ./${EXECUTABLE_NAME_GCOV} -instr-profile=${EXECUTABLE_NAME_GCOV}.profdata --ignore-filename-regex="unity/src/*"
     DEPENDS hello_gcov
     WORKING_DIRECTORY ./
 )
