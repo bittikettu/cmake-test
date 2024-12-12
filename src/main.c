@@ -1,6 +1,6 @@
+#include <funktiot.h>
 #include <stdint.h>
 #include <unity.h>
-#include <funktiot.h>
 #include <version.h>
 
 // #include <stdio.h>

@@ -73,24 +73,23 @@ add_custom_target(
     ${CMAKE_SOURCE_DIR}/generate_git_hashes.cmake
   DEPENDS ${SOURCE_FILES})
 
-add_executable(${EXECUTABLE_NAME_TEST} ${SOURCE_FILES} unity/src/unity.c)
-add_executable(${EXECUTABLE_NAME_GCOV} ${SOURCE_FILES} unity/src/unity.c)
+add_executable(${EXECUTABLE_NAME_TEST} ${SOURCE_FILES})
+add_executable(${EXECUTABLE_NAME_GCOV} ${SOURCE_FILES})
 target_compile_options(${EXECUTABLE_NAME_GCOV} PRIVATE -fprofile-instr-generate
                                                        -fcoverage-mapping)
 target_link_libraries(${EXECUTABLE_NAME_GCOV} PRIVATE -fprofile-instr-generate
                                                       -fcoverage-mapping)
 target_include_directories(${EXECUTABLE_NAME_GCOV}
                            PRIVATE "${PROJECT_BINARY_DIR}"
-                           PRIVATE "unity/src"
                            PRIVATE "include"
                            )
 target_include_directories(${EXECUTABLE_NAME_TEST}
                            PRIVATE "${PROJECT_BINARY_DIR}"
-                           PRIVATE "unity/src"
                            PRIVATE "include"
                            )
 include_directories(${CMAKE_BINARY_DIR})
-
+target_link_libraries(${EXECUTABLE_NAME_TEST} PRIVATE unity)
+target_link_libraries(${EXECUTABLE_NAME_GCOV} PRIVATE unity)
 # Add a custom target to format the code
 add_custom_target(
   format
