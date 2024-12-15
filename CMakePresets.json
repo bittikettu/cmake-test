@@ -1,0 +1,32 @@
+{
+    "version" : 10,
+    "configurePresets": [
+        {
+            "name": "debug",
+            "description": "Default settings for my cmake project",
+            "hidden": false,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/debug",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE" : "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "release",
+            "description": "Default settings for my cmake project",
+            "hidden": false,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/release",
+            
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE" : "Release",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        }
+    ]
+}

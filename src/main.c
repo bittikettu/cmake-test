@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <unity.h>
 #include <version.h>
+//#include <git_hashes.h>
+#include <jansson.h>
 
 // #include <stdio.h>
 
@@ -91,6 +93,46 @@ void test_divide_with_negative_numbers(void) {
   TEST_ASSERT_EQUAL_FLOAT(result, -5.0);
 }
 
+int janssoni() {
+    // JSON string
+    const char *json_string = "{\"name\": \"Alice\", \"age\": 30, \"is_student\": false, \"skills\": [\"C\", \"C++\", \"Python\"]}";
+
+    // Parse the JSON string
+    json_error_t error;
+    json_t *root = json_loads(json_string, 0, &error);
+    if (!root) {
+        fprintf(stderr, "Error parsing JSON: %s\n", error.text);
+        return 1;
+    }
+
+    // Access and print individual elements
+    const char *name = json_string_value(json_object_get(root, "name"));
+    if (name) printf("Name: %s\n", name);
+
+    json_t *age = json_object_get(root, "age");
+    if (json_is_integer(age)) printf("Age: %lld\n", json_integer_value(age));
+
+    json_t *is_student = json_object_get(root, "is_student");
+    if (json_is_boolean(is_student)) printf("Is student: %s\n", json_is_true(is_student) ? "true" : "false");
+
+    // Access and print array elements
+    json_t *skills = json_object_get(root, "skills");
+    if (json_is_array(skills)) {
+        printf("Skills:\n");
+        size_t index;
+        json_t *value;
+        json_array_foreach(skills, index, value) {
+            printf("  - %s\n", json_string_value(value));
+        }
+    }
+
+    // Cleanup
+    json_decref(root);
+
+    return 0;
+}
+
+
 // Main function that runs the tests
 int main(void) {
   // Initialize Unity test framework
@@ -114,5 +156,6 @@ int main(void) {
   //  RUN_TEST(test_FailingTest);
 
   // End the test and print results
+  janssoni();
   return UNITY_END();
 }
