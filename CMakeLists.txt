@@ -66,6 +66,7 @@ set(PROJECT_VERSION
     "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
 )
 MESSAGE(${CMAKE_BUILD_TYPE})
+MESSAGE(${PROJECT_VERSION})
 # Configure the version.h file
 configure_file(version.h.in version.h @ONLY)
 # target_include_directories(${EXECUTABLE_NAME_TEST} PUBLIC
