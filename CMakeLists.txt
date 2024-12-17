@@ -11,6 +11,7 @@ project(modular_cmake)
 #set(SOURCE_FILES src/main.c src/funktiot.c)
 
 add_subdirectory(src)
+add_subdirectory(test)
 
 execute_process(
   COMMAND git describe --tags --always --dirty
