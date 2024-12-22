@@ -3,7 +3,7 @@
 #include <string.h>
 
 // Initialize a bicycle
-void initialize_bicycle(Bicycle *bicycle, int id, const char *owner) {
+void bicycle_initialize(Bicycle *bicycle, int id, const char *owner) {
     if (!bicycle) return;
     bicycle->id = id;
     strncpy(bicycle->owner, owner, sizeof(bicycle->owner) - 1);
@@ -12,14 +12,14 @@ void initialize_bicycle(Bicycle *bicycle, int id, const char *owner) {
 }
 
 // Set the usage status of a bicycle
-void set_bicycle_in_use(Bicycle *bicycle, bool in_use) {
+void bicycle_set_in_use(Bicycle *bicycle, bool in_use) {
     if (bicycle) {
         bicycle->is_in_use = in_use;
     }
 }
 
 // Print the details of a bicycle
-void print_bicycle(const Bicycle *bicycle) {
+void bicycle_print(const Bicycle *bicycle) {
     if (bicycle) {
         printf("Bicycle ID: %d, Owner: %s, In Use: %s\n",
                bicycle->id,

@@ -60,16 +60,16 @@ int main(void) {
 
   BicycleCellar cellar;
 
-  initialize_bicycle_cellar(&cellar);
-  add_bicycle(&cellar, 1, "Alice");
-  add_bicycle(&cellar, 2, "Bob");
-  add_bicycle(&cellar, 3, "Charlie");
+  cellar_initialize(&cellar);
+  cellar_add_bicycle(&cellar, 1, "Alice");
+  cellar_add_bicycle(&cellar, 2, "Bob");
+  cellar_add_bicycle(&cellar, 3, "Charlie");
 
-  print_bicycle_cellar(&cellar);
+  cellar_print_bicycle_cellar(&cellar);
 
-  mark_bicycle_in_use(&cellar, 2, true);
-  print_bicycle_cellar(&cellar);
+  cellar_mark_bicycle_in_use(&cellar, 2, true);
+  cellar_print_bicycle_cellar(&cellar);
 
-  remove_bicycle(&cellar, 1);
-  print_bicycle_cellar(&cellar);
+  cellar_remove_bicycle(&cellar, 1);
+  cellar_print_bicycle_cellar(&cellar);
 }

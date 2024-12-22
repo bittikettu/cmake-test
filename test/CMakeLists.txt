@@ -3,7 +3,7 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(APP_NAME ${PROJECT_NAME}-test)
 # Add the source files
-include(fetchContent)
+include(FetchContent)
 FetchContent_Declare(
   unity
   GIT_REPOSITORY https://github.com/ThrowTheSwitch/Unity.git
@@ -31,7 +31,6 @@ include_directories(../include)
 include_directories(${CMAKE_SOURCE_DIR}/lib)
 include_directories(${CMAKE_BINARY_DIR})
 
-message("MITAs ${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(${APP_NAME} ${SRC_FILES})
 target_link_libraries(${APP_NAME} PRIVATE jansson)
 target_link_libraries(${APP_NAME} PRIVATE unity)
