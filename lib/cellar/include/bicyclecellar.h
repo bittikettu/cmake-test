@@ -1,17 +1,10 @@
 #ifndef BICYCLE_CELLAR_H
 #define BICYCLE_CELLAR_H
 
-#include <stdbool.h>
-
-// Define the Bicycle structure
-typedef struct {
-    int id;
-    char owner[50];
-    bool is_in_use;
-} Bicycle;
+#include "../include/bicycle.h"
 
 // Define the BicycleCellar structure
-typedef struct {
+typedef struct tBicycleCellar {
     Bicycle bicycles[100]; // Maximum capacity of 100 bicycles
     int count;             // Number of bicycles currently stored
 } BicycleCellar;
