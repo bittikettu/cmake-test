@@ -1,0 +1,17 @@
+= CMake-Test
+viidakkovekara@gmail.com
+:toc:  
+:toc-title: Table of Contents  
+
+== Introduction  
+
+Simple project to utilize CMake + Clang + Unity + Jansson to create modular structure for a project.
+
+== Requirements  
+
+List the prerequisites needed to run or build the project:  
+- CMake + Clang (LLVM)
+
+== Installation  
+
+NOTE: Coming soon!
