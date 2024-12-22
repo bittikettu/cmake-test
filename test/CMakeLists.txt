@@ -13,7 +13,7 @@ FetchContent_Declare(
   jansson
   #GIT_REPOSITORY https://github.com/akheron/jansson.git
   GIT_REPOSITORY https://github.com/Andrew-Au/jansson.git
-  GIT_TAG cmake_update/revised/merge 
+  GIT_TAG cmake_update/revised/merge
   GIT_SHALLOW On
 )
 

@@ -1,10 +1,5 @@
 CompileFlags:
   Add: [-Wall, -Wextra, -Wpedantic]
 
-Diagnostics:
-  ClangTidy:
-    CheckOptions:
-      readability-identifier-naming.VariableCase: CamelCase
-
 Index:
   Background: Build

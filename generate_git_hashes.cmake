@@ -32,7 +32,7 @@ file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h
 
 foreach(SOURCE_FILE ${SOURCE_FILES_LIST})
   get_filename_component(FILE_NAME ${SOURCE_FILE} NAME)
-  
+
   string(REPLACE "." "_" FILE "${FILE_NAME}")
   file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h
        "\t${FILE}_index,\n")
@@ -41,7 +41,7 @@ endforeach()
 file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h
       "\tmax_ver_index\n};\n\n")
 
-file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h 
+file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h
 "struct tversion {
 \tenum versions index;
 \tchar *hash;
@@ -52,7 +52,7 @@ file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h
 
 foreach(SOURCE_FILE ${SOURCE_FILES_LIST})
   get_filename_component(FILE_NAME ${SOURCE_FILE} NAME)
-  
+
   string(REPLACE "." "_" FILE "${FILE_NAME}")
   file(APPEND ${CMAKE_BINARY_DIR}/git_hashes.h
        "\t{.index=${FILE}_index,.hash=${FILE}_GIT_HASH},\n")

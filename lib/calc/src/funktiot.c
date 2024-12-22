@@ -10,8 +10,8 @@ int calc_multiply(int a_number, int b_number) { return a_number * b_number; }
 
 // Function to divide two numbers
 float calc_divide(float a_number, float b_number) {
-  if (b_number == 0) {
-    return 0;
-  }
-  return a_number / b_number;
+	if (b_number == 0) {
+		return 0;
+	}
+	return a_number / b_number;
 }

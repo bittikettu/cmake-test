@@ -1,6 +1,6 @@
 enable_testing()
 
-add_test(NAME test-${TEST_APP_POSTFIX} 
+add_test(NAME test-${TEST_APP_POSTFIX}
 COMMAND ${TEST_BINARY_NAME}
 DEPENDS ${TEST_BINARY_NAME}
 )

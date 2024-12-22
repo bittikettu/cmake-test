@@ -1,0 +1,22 @@
+BasedOnStyle: Google
+IndentWidth: 4           # Number of spaces for indentation.
+TabWidth: 4              # Width of a tab character.
+UseTab: Always            # Always use spaces instead of tabs.
+BreakBeforeBraces: Attach # Attach braces to the preceding line.
+
+ColumnLimit: 120          # Max number of columns per line.
+AllowShortFunctionsOnASingleLine: All # Allow short functions on one line.
+IndentCaseLabels: true   # Indent case labels in switch statements.
+AlignTrailingComments: true # Align comments to the right.
+SpaceAfterCStyleCast: true # Space after C-style cast.
+
+IncludeBlocks: Preserve  # Keep include blocks intact.
+SortIncludes: false      # Do not sort includes automatically.
+
+PointerAlignment: Right  # Place '*' next to the variable name.
+NamespaceIndentation: All # Indent inside namespaces.
+
+ReflowComments: true     # Reformat comments to fit within the column limit.
+SpacesInParentheses: false # No spaces inside parentheses.
+SpacesInSquareBrackets: false # No spaces inside square brackets.
+SpaceBeforeParens: ControlStatements # Space before parentheses in control statements.
