@@ -1,6 +1,7 @@
-#include <funktiot.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <version.h>
+#include <calc/calc.h>
 //#include <git_hashes.h>
 #include <jansson.h>
 
@@ -45,7 +46,8 @@ int janssoni() {
 
 
 int main(void) {
-  printf("Ver: %d.%d.%d\n", PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR,
-         PROJECT_VERSION_PATCH);
+  printf("Ver: %d.%d.%d\n", PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR, PROJECT_VERSION_PATCH);
   janssoni();
+  int sum = calc_add(2, 34);
+  printf("sum %d\n", sum);
 }

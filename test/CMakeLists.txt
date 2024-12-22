@@ -24,19 +24,16 @@ set(JANSSON_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(unity jansson)
 
 set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
-set(SRC_FILES tests.c ../src/funktiot.c)
+file(GLOB SOURCE_FILES "${CMAKE_SOURCE_DIR}/lib/calc/src/*.c")
+set(SRC_FILES tests.c ${SOURCE_FILES})
+
 include_directories(../include)
+include_directories(${CMAKE_SOURCE_DIR}/lib)
 include_directories(${CMAKE_BINARY_DIR})
+
 message("MITAs ${CMAKE_CURRENT_SOURCE_DIR}")
 add_executable(${APP_NAME} ${SRC_FILES})
-#add_executable(${PROJECT_NAME}-gcov ${SOURCE_FILES})
-
 target_link_libraries(${APP_NAME} PRIVATE jansson)
 target_link_libraries(${APP_NAME} PRIVATE unity)
 
-#target_link_libraries(${PROJECT_NAME}-gcov PRIVATE unity)
-#target_compile_options(${PROJECT_NAME}-gcov PRIVATE -fprofile-instr-generate -fcoverage-mapping)
-#target_link_libraries(${PROJECT_NAME}-gcov PRIVATE -fprofile-instr-generate -fcoverage-mapping)
-
 add_dependencies(${APP_NAME} generate_git_hashes)
-#add_dependencies(${PROJECT_NAME}-gcov generate_git_hashes)
