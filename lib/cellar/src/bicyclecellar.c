@@ -17,10 +17,8 @@ bool add_bicycle(BicycleCellar *cellar, int id, const char *owner) {
             return false; // Bicycle with the same ID already exists
         }
     }
-    Bicycle new_bike = { .id = id, .is_in_use = false };
-    strncpy(new_bike.owner, owner, sizeof(new_bike.owner) - 1);
-    new_bike.owner[sizeof(new_bike.owner) - 1] = '\0';
-    cellar->bicycles[cellar->count++] = new_bike;
+    initialize_bicycle(&cellar->bicycles[cellar->count], id, owner);
+    cellar->count++;
     return true;
 }
 
@@ -43,7 +41,7 @@ bool remove_bicycle(BicycleCellar *cellar, int id) {
 bool mark_bicycle_in_use(BicycleCellar *cellar, int id, bool in_use) {
     for (int i = 0; i < cellar->count; i++) {
         if (cellar->bicycles[i].id == id) {
-            cellar->bicycles[i].is_in_use = in_use;
+            set_bicycle_in_use(&cellar->bicycles[i], in_use);
             return true;
         }
     }
@@ -54,9 +52,6 @@ bool mark_bicycle_in_use(BicycleCellar *cellar, int id, bool in_use) {
 void print_bicycle_cellar(const BicycleCellar *cellar) {
     printf("Bicycle Cellar (%d bicycles):\n", cellar->count);
     for (int i = 0; i < cellar->count; i++) {
-        printf("  ID: %d, Owner: %s, In Use: %s\n",
-               cellar->bicycles[i].id,
-               cellar->bicycles[i].owner,
-               cellar->bicycles[i].is_in_use ? "Yes" : "No");
+        print_bicycle(&cellar->bicycles[i]);
     }
 }
