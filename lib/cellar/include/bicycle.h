@@ -11,8 +11,8 @@ typedef struct tBicycle {
 } Bicycle;
 
 // Function prototypes
-void initialize_bicycle(Bicycle *bicycle, int id, const char *owner);
-void set_bicycle_in_use(Bicycle *bicycle, bool in_use);
-void print_bicycle(const Bicycle *bicycle);
+void bicycle_initialize(Bicycle *bicycle, int id, const char *owner);
+void bicycle_set_in_use(Bicycle *bicycle, bool in_use);
+void bicycle_print(const Bicycle *bicycle);
 
 #endif // BICYCLE_H

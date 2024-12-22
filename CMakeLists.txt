@@ -32,7 +32,7 @@ execute_process(
 set(PROJECT_VERSION
     "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
 )
-MESSAGE(${CMAKE_BUILD_TYPE})
+#MESSAGE(${CMAKE_BUILD_TYPE})
 MESSAGE(${PROJECT_VERSION})
 # Configure the version.h file
 configure_file(version.h.in version.h @ONLY)
