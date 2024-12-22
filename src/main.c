@@ -42,7 +42,9 @@ int janssoni(void) {
 		printf("Skills:\n");
 		size_t index = 0;
 		json_t* value = NULL;
-		json_array_foreach(skills, index, value) { printf("  - %s\n", json_string_value(value)); }
+		json_array_foreach(skills, index, value) {
+			printf("  - %s\n", json_string_value(value));
+		}
 	}
 
 	// Cleanup

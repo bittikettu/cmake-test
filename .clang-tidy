@@ -1,6 +1,7 @@
 ---
 Checks: >
   -*,
+  -unused-includes,
   bugprone-*,
   performance-*,
   readability-*,

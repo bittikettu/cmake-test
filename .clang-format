@@ -1,11 +1,13 @@
+---
 BasedOnStyle: Google
+Language: Cpp
 IndentWidth: 4           # Number of spaces for indentation.
 TabWidth: 4              # Width of a tab character.
 UseTab: Always            # Always use spaces instead of tabs.
 BreakBeforeBraces: Attach # Attach braces to the preceding line.
 
 ColumnLimit: 120          # Max number of columns per line.
-AllowShortFunctionsOnASingleLine: All # Allow short functions on one line.
+AllowShortFunctionsOnASingleLine: Empty # Allow short functions on one line.
 IndentCaseLabels: true   # Indent case labels in switch statements.
 AlignTrailingComments: true # Align comments to the right.
 SpaceAfterCStyleCast: true # Space after C-style cast.

@@ -1,7 +1,9 @@
 #include "../include/bicyclecellar.h"
 #include <stdio.h>
 
-void cellar_initialize(BicycleCellar *cellar) { cellar->count = 0; }
+void cellar_initialize(BicycleCellar *cellar) {
+	cellar->count = 0;
+}
 
 bool cellar_add_bicycle(BicycleCellar *cellar, int id, const char *owner) {
 	if (cellar->count >= MAX_AMOUNT_OF_BICYCLES) {
