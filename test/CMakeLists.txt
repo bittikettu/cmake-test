@@ -23,16 +23,5 @@ set(JANSSON_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(unity jansson)
 
-set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
-file(GLOB_RECURSE  SOURCE_FILES "${CMAKE_SOURCE_DIR}/lib/*.c")
-set(SRC_FILES tests.c ${SOURCE_FILES})
-
-include_directories(../include)
-include_directories(${CMAKE_SOURCE_DIR}/lib)
-include_directories(${CMAKE_BINARY_DIR})
-
-add_executable(${APP_NAME} ${SRC_FILES})
-target_link_libraries(${APP_NAME} PRIVATE jansson)
-target_link_libraries(${APP_NAME} PRIVATE unity)
-
-add_dependencies(${APP_NAME} generate_git_hashes)
+include(calc.cmake)
+include(cellar.cmake)
