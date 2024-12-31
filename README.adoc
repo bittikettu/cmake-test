@@ -6,12 +6,35 @@ viidakkovekara@gmail.com
 == Introduction
 
 Simple project to utilize CMake + Clang + Unity + Jansson to create modular structure for a project.
+It has a nice test suite to verify the correctness of the implemented functions.
+
+== Features 
+- Modular structure for a project.
+- Test suite to verify the correctness of the implemented functions.
 
 == Requirements
+- List the prerequisites needed to run or build the project:
+- CMake + Clang (LLVM) + Unity + Jansson
+- Some of the Unity and Jansson are installed using FetchContent of the CMake.
 
-List the prerequisites needed to run or build the project:
-- CMake + Clang (LLVM)
+== Build Process
+1. Clone the repository:
+2. Install dependencies:
+3. Configure and build the project using CMake.
 
-== Installation
+== Testing
+The project includes a test suite to verify the correctness of the implemented functions.
 
-NOTE: Coming soon!
+== How to start
+[source,bash]
+----
+cmake --preset default
+cd build
+ninja
+ninja test
+----
+
+== Contributing
+Contributions are welcome! Please feel free to submit pull requests or open issues on the GitHub repository.
+
+WARNING: AI has been used to generate parts of this project. Local modles and online models. The content is not directly written by humans. Please be aware that the generated content may contain errors or inaccuracies. Always verify the information before using it. If you have any questions, feel free to ask.
