@@ -4,6 +4,7 @@
 #include <version.h>
 
 // #include <git_hashes.h>
+// Ei oikein toimi jostain syystä.
 #include <jansson.h>
 
 int janssoni(void) {
