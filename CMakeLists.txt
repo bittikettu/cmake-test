@@ -2,8 +2,11 @@ cmake_minimum_required(VERSION 3.20)
 project(modular_cmake)
 
 
-add_subdirectory(src)
+add_subdirectory(src_raylib)
+add_subdirectory(src_sdl)
+add_subdirectory(src_clay)
 add_subdirectory(test)
+
 
 execute_process(
   COMMAND git describe --tags --always --dirty

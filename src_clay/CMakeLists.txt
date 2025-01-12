@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(APP_NAME ${PROJECT_NAME}-app)
+set(APP_NAME ${PROJECT_NAME}-clay-app)
 # Add the source files
 include(FetchContent)
 FetchContent_Declare(
@@ -46,13 +46,3 @@ include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})
 
 target_link_libraries(${APP_NAME} PRIVATE jansson raylib)
-
-add_custom_target(
-  generate_git_hashes ALL
-  COMMAND
-    ${CMAKE_COMMAND} -DFOLDER="${CMAKE_CURRENT_SOURCE_DIR}"
-    -DSOURCE_FILES="${SRC_FILES}" -P
-    ${CMAKE_SOURCE_DIR}/generate_git_hashes.cmake
-  DEPENDS ${SRC_FILES})
-
-add_dependencies(${APP_NAME} generate_git_hashes)
