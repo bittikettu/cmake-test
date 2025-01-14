@@ -1,0 +1,15 @@
+{
+    "build": {
+        // Path is relative to the devcontainer.json file.
+        "dockerfile": "../Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+          "extensions": ["ms-vscode.cmake-tools",
+          "llvm-vs-code-extensions.vscode-clangd", 
+          "vadimcn.vscode-lldb",
+        "ms-azuretools.vscode-docker"]   
+             
+        }
+      }
+}
