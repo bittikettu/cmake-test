@@ -2,9 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 project(modular_cmake)
 
 
-add_subdirectory(src_raylib)
-add_subdirectory(src_sdl)
-add_subdirectory(src_clay)
+#add_subdirectory(src_raylib)
+#add_subdirectory(src_sdl)
+#add_subdirectory(src_clay)
 add_subdirectory(test)
 
 
