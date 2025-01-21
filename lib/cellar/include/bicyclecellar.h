@@ -1,7 +1,7 @@
 #ifndef BICYCLE_CELLAR_H
 #define BICYCLE_CELLAR_H
 
-#include "../include/bicycle.h"
+#include "bicycle.h"
 
 #define MAX_AMOUNT_OF_BICYCLES 100
 

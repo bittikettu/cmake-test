@@ -5,7 +5,10 @@ project(modular_cmake)
 #add_subdirectory(src_raylib)
 #add_subdirectory(src_sdl)
 #add_subdirectory(src_clay)
-add_subdirectory(test)
+#add_subdirectory(test)
+#add_subdirectory(libtest)
+add_subdirectory(lib)
+#add_subdirectory(libtest-user)
 
 
 execute_process(

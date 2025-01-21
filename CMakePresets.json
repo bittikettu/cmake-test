@@ -15,6 +15,21 @@
             }
         },
         {
+            "name": "local_default",
+            "description": "Library files are installed inside build-directory",
+            "hidden": false,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE" : "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_PREFIX_PATH": "./install/",
+                "CMAKE_INSTALL_PREFIX": "./install/"
+            }
+        },
+        {
             "name": "release",
             "description": "Default settings for my cmake project",
             "hidden": false,
@@ -25,7 +40,9 @@
                 "CMAKE_BUILD_TYPE" : "Release",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
                 "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++"
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_PREFIX_PATH": "./install/",
+                "CMAKE_INSTALL_PREFIX": "./install/"
             }
         }
     ]
