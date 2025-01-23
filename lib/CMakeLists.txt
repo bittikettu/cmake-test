@@ -5,8 +5,40 @@ project(kivakirjastolib VERSION 0.0.1
 )
 
 set(THIS_LIB_NAME kivakirjasto)
-
 include(GNUInstallDirs)
+
+# Generate version header
+execute_process(
+  COMMAND git describe --tags --always --dirty
+  OUTPUT_VARIABLE GIT_VERSION
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+string(REGEX MATCH "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)-([^\\.]*)$" VERSION_MATCH ${GIT_VERSION})
+if(VERSION_MATCH)
+  set(PROJECT_VERSION_MAJOR ${CMAKE_MATCH_1})
+  set(PROJECT_VERSION_MINOR ${CMAKE_MATCH_2})
+  set(PROJECT_VERSION_PATCH ${CMAKE_MATCH_3})
+  set(PROJECT_VERSION_HASH ${CMAKE_MATCH_4})
+else()
+  set(PROJECT_VERSION_MAJOR 0)
+  set(PROJECT_VERSION_MINOR 0)
+  set(PROJECT_VERSION_PATCH 0)
+  set(PROJECT_VERSION_HASH 0)
+endif()
+
+execute_process(
+  COMMAND git rev-parse --short HEAD
+  OUTPUT_VARIABLE GIT_COMMIT_HASH
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+# Set the project version
+set(PROJECT_VERSION
+    "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
+)
+#MESSAGE(${CMAKE_BUILD_TYPE})
+MESSAGE(${PROJECT_VERSION})
+# Configure the version.h file
+configure_file(version_kivakirjasto.h.in version_kivakirjasto.h @ONLY)
 
 set(INCLUDE_HEADERS
     cellar/include/bicycle.h
@@ -14,13 +46,14 @@ set(INCLUDE_HEADERS
     cellar/cellar.h
     calc/calc.h
     calc/include/funktiot.h
+    ${CMAKE_CURRENT_BINARY_DIR}/version_kivakirjasto.h
 )
 
 add_library(${THIS_LIB_NAME} STATIC
     cellar/src/bicycle.c 
     cellar/src/bicyclecellar.c
     calc/src/funktiot.c
-    ${INCLUDE_HEADERS}    
+    ${INCLUDE_HEADERS}
 )
 
 target_include_directories(${THIS_LIB_NAME} 
@@ -33,10 +66,10 @@ install(TARGETS ${THIS_LIB_NAME}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${THIS_LIB_NAME}
 )
 
-install(FILES ${INCLUDE_HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES ${INCLUDE_HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${THIS_LIB_NAME})
 
 install(EXPORT ${THIS_LIB_NAME}Targets
     FILE ${THIS_LIB_NAME}Targets.cmake

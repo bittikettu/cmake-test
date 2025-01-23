@@ -1,5 +1,6 @@
 #include <stdio.h>
-#include <cellar.h>
+#include <kivakirjasto/cellar.h>
+#include <kivakirjasto/version_kivakirjasto.h>
 //#include <bicycle.h>
 //#include <bicyclecellar.h>
 
@@ -9,5 +10,5 @@ int main(void) {
     cellar_add_bicycle(&cellar, 1, "Alice");
     cellar_add_bicycle(&cellar, 2, "Bob");
     cellar_add_bicycle(&cellar, 3, "Charlie");
-    printf("Hello\n");
+    printf("Hello from version %s\n",KIVAKIRJASTO_VERSION_HASH);
 }

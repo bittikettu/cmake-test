@@ -21,7 +21,7 @@ set(JANSSON_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(JANSSON_WITHOUT_TESTS ON CACHE BOOL "" FORCE)
 set(JANSSON_EXAMPLES OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(unity jansson)
+FetchContent_MakeAvailable(unity jansson )
 
 include(calc.cmake)
 include(cellar.cmake)

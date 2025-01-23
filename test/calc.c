@@ -1,4 +1,4 @@
-#include <calc/calc.h>
+#include <kivakirjasto/calc.h>
 #include <stdint.h>
 #include <unity.h>
 #include <version.h>
