@@ -12,14 +12,16 @@ set(INCLUDE_HEADERS
     cellar/include/bicycle.h
     cellar/include/bicyclecellar.h
     cellar/cellar.h
+    calc/calc.h
+    calc/include/funktiot.h
 )
 
-add_library(${THIS_LIB_NAME} 
+add_library(${THIS_LIB_NAME} STATIC
     cellar/src/bicycle.c 
     cellar/src/bicyclecellar.c
+    calc/src/funktiot.c
     ${INCLUDE_HEADERS}    
 )
-
 
 target_include_directories(${THIS_LIB_NAME} 
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -41,11 +43,6 @@ install(EXPORT ${THIS_LIB_NAME}Targets
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${THIS_LIB_NAME}
 )
 
-#set_target_properties(${THIS_LIB_NAME} PROPERTIES
-#    PUBLIC_HEADER "include/bicycle.h"
-#    PUBLIC_HEADER "include/bicyclecellar.h"
-#)
-
 include(GenerateExportHeader)
 generate_export_header(${THIS_LIB_NAME})
 
@@ -61,11 +58,27 @@ install(FILES
     DESTINATION DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${THIS_LIB_NAME}
 )
 
-#write_basic_package_version_file(
-#    ${CMAKE_CURRENT_BINARY_DIR}/${THIS_LIB_NAME}Version.cmake
-#    VERSION ${PROJECT_VERSION}
-#    COMPATIBILITY SameMajorVersion
-#    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${THIS_LIB_NAME}
-#)
+add_custom_target(kivakirjasto_install
+    COMMENT "Install the ${THIS_LIB_NAME} to ${CMAKE_INSTALL_PREFIX}"
+    COMMAND ${CMAKE_COMMAND} --build . --target install
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    DEPENDS ${THIS_LIB_NAME}
+)
 
-#export(EXPORT ${THIS_LIB_NAME} FILE ${CMAKE_CURRENT_BINARY_DIR}/${THIS_LIB_NAME}.cmake)
+
+
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_PACKAGE_NAME ${THIS_LIB_NAME})
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_VENDOR "Juha Viitanen")
+set(CPACK_PACKAGE_DESCRIPTION "My Application")
+set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}")
+set(CPACK_PACKAGE_CONTACT "viidakkovekara@gmail.com")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "MyApp-${CPACK_PACKAGE_VERSION}")
+include(CPack)
+
+add_custom_target(pakets
+    COMMAND ${CMAKE_COMMAND} --build . --target package
+    COMMENT "Generating package using CPack"
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+)
