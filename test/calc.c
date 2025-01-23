@@ -1,7 +1,7 @@
 #include <kivakirjasto/calc.h>
+#include <kivakirjasto/version_kivakirjasto.h>
 #include <stdint.h>
 #include <unity.h>
-#include <version.h>
 //#include <git_hashes.h>
 #include <jansson.h>
 
@@ -97,8 +97,8 @@ void test_divide_with_negative_numbers(void) {
 int main(void) {
   // Initialize Unity test framework
   UNITY_BEGIN();
-  printf("Ver: %d.%d.%d\n", PROJECT_VERSION_MAJOR, PROJECT_VERSION_MINOR,
-         PROJECT_VERSION_PATCH);
+  printf("Ver: %d.%d.%d\n", KIVAKIRJASTO_VERSION_MAJOR, KIVAKIRJASTO_VERSION_MINOR,
+         KIVAKIRJASTO_VERSION_PATCH);
   // Run individual test functions
   RUN_TEST(test_Addition);
   RUN_TEST(test_Subtraction);

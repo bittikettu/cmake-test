@@ -12,4 +12,3 @@ set(SRC_FILES main.c)
 add_executable(${APP_NAME} ${SRC_FILES})
 
 #target_link_libraries(${APP_NAME} PRIVATE raylib)
-

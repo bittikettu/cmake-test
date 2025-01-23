@@ -66,5 +66,3 @@ include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})
 
 target_link_libraries(${APP_NAME} PUBLIC SDL3-static SDL3_image-static freetype SDL3_ttf-static)
-
-

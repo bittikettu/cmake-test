@@ -50,13 +50,13 @@ set(INCLUDE_HEADERS
 )
 
 add_library(${THIS_LIB_NAME} STATIC
-    cellar/src/bicycle.c 
+    cellar/src/bicycle.c
     cellar/src/bicyclecellar.c
     calc/src/funktiot.c
     ${INCLUDE_HEADERS}
 )
 
-target_include_directories(${THIS_LIB_NAME} 
+target_include_directories(${THIS_LIB_NAME}
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     INTERFACE $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )

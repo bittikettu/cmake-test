@@ -292,7 +292,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 									 &as->renderer)) {
 		return SDL_APP_FAILURE;
 	}
-    
+
 	snake_initialize(&as->snake_ctx);
 
 	as->last_step = SDL_GetTicks();

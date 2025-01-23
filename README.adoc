@@ -8,7 +8,7 @@ viidakkovekara@gmail.com
 Simple project to utilize CMake + Clang + Unity + Jansson to create modular structure for a project.
 It has a nice test suite to verify the correctness of the implemented functions.
 
-== Features 
+== Features
 - Modular structure for a project.
 - Test suite to verify the correctness of the implemented functions.
 

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y cmake clang git ninja-build clangd gdb lldb liblldb-dev\
     && apt-get clean autoclean \
     && apt-get autoremove --yes\
-    && rm -rf /var/lib/{apt,dpkg,cache,log} \ 
+    && rm -rf /var/lib/{apt,dpkg,cache,log} \
     && git clone https://github.com/lldb-tools/lldb-mi.git && cd lldb-mi && mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. \
     && make -j$(nproc) && make install
 

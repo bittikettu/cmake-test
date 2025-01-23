@@ -1,6 +1,5 @@
 #include <stdint.h>
 #include <unity.h>
-#include <version.h>
 #include <kivakirjasto/cellar.h>
 
 BicycleCellar cellar = {0};
