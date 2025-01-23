@@ -1,10 +1,20 @@
 {
     "version" : 10,
     "configurePresets": [
+
         {
-            "name": "default",
-            "description": "Default settings for my cmake project",
-            "hidden": false,
+            "name": "local",
+            "description": "local installation template",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "./install/",
+                "CMAKE_INSTALL_PREFIX": "./install/"
+            }
+        },
+        {
+            "name": "default_template_debug",
+            "description": "local installation template",
+            "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
@@ -15,35 +25,54 @@
             }
         },
         {
-            "name": "local_default",
-            "description": "Library files are installed inside build-directory",
-            "hidden": false,
-            "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE" : "Debug",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
-                "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++",
-                "CMAKE_PREFIX_PATH": "./install/",
-                "CMAKE_INSTALL_PREFIX": "./install/"
-            }
-        },
-        {
-            "name": "release",
-            "description": "Default settings for my cmake project",
-            "hidden": false,
+            "name": "default_template_release",
+            "description": "local installation template",
+            "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/release",
-
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE" : "Release",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
                 "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++",
-                "CMAKE_PREFIX_PATH": "./install/",
-                "CMAKE_INSTALL_PREFIX": "./install/"
+                "CMAKE_CXX_COMPILER": "clang++"
+            }
+        },
+        {
+            "name": "local_library_debug",
+            "description": "Library files are installed inside build-directory",
+            "inherits" : ["local","default_template_debug"],
+            "hidden": false,
+            "cacheVariables": {
+                "BUILD_PHASE" : "library"
+            }
+        },
+        {
+            "name": "local_application_debug",
+            "description": "Library files are installed inside build-directory",
+            "inherits" : ["local","default_template_debug"],
+            "hidden": false,
+            "cacheVariables": {
+                "BUILD_PHASE" : "app"
+            }
+        },
+        {
+            "name": "local_library_release",
+            "description": "Local library to install-folder with release",
+            "inherits" : ["local","default_template_release"],
+            "hidden": false,
+            "cacheVariables": {
+                "BUILD_PHASE" : "library"
+            }
+        },
+        {
+            "name": "local_application_release",
+            "description": "Local app to install-folder with release",
+            "inherits" : ["local","default_template_release"],
+            "hidden": false,
+            "cacheVariables": {
+                "BUILD_PHASE" : "app"
             }
         }
+
     ]
 }

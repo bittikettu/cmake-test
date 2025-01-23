@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
 project(modular_cmake)
+include(ExternalProject)
 
 
-#add_subdirectory(src_raylib)
-#add_subdirectory(src_sdl)
-#add_subdirectory(src_clay)
-#add_subdirectory(test)
-#add_subdirectory(libtest)
-add_subdirectory(lib)
-#add_subdirectory(libtest-user)
 
+if(BUILD_PHASE STREQUAL "library")
+    message("BUILD_PHASE has the expected value ${BUILD_PHASE}.")
+    add_subdirectory(lib)
+else()
+    message("BUILD_PHASE does not have the expected value.")
+    add_subdirectory(libtest-user)
+endif()
 
 execute_process(
   COMMAND git describe --tags --always --dirty
