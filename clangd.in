@@ -1,5 +1,5 @@
 CompileFlags:
-  CompilationDatabase: @CMAKE_BINARY_DIR@
+  CompilationDatabase: "@CMAKE_BINARY_DIR@"
 
 Index:
   Background: Build
