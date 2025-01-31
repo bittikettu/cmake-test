@@ -16,7 +16,7 @@
             "description": "local installation template",
             "hidden": true,
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build",
+            "binaryDir": "${sourceDir}/build/debug",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE" : "Debug",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",

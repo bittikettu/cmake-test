@@ -1,5 +1,5 @@
 CompileFlags:
-  Add: [-Wall, -Wextra, -Wpedantic]
+  CompilationDatabase: @CMAKE_BINARY_DIR@
 
 Index:
   Background: Build
