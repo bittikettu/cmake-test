@@ -8,6 +8,9 @@ else()
     message("BUILD_PHASE does not have the expected value.")
     add_subdirectory(libtest-user)
     add_subdirectory(test)
+    add_subdirectory(src_raylib)
+    add_subdirectory(src_sdl)
+    add_subdirectory(src_clay)
 endif()
 execute_process(
   COMMAND git describe --tags --always --dirty

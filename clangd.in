@@ -3,3 +3,8 @@ CompileFlags:
 
 Index:
   Background: Build
+
+Diagnostics:
+  ClangTidy:
+    CheckOptions:
+      readability-identifier-naming.VariableCase: CamelCase
