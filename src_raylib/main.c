@@ -1,5 +1,3 @@
-#include <calc/calc.h>
-#include <cellar/cellar.h>
 #include <stdint.h>
 #include <version.h>
 #include <raylib.h>
