@@ -1,24 +1,23 @@
 {
-    "version" : 10,
+    "version": 10,
     "configurePresets": [
-
         {
             "name": "local",
             "description": "local installation template",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_PREFIX_PATH": "./install/",
-                "CMAKE_INSTALL_PREFIX": "./install/"
+                "CMAKE_PREFIX_PATH": "${sourceDir}/build/install/",
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install/"
             }
         },
         {
             "name": "default_template_debug",
             "description": "local installation template",
             "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/debug",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE" : "Debug",
+                "CMAKE_BUILD_TYPE": "Debug",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++"
@@ -29,9 +28,9 @@
             "description": "local installation template",
             "hidden": true,
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/release",
+            "binaryDir": "${sourceDir}/build/${presetName}",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE" : "Release",
+                "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++"
@@ -40,39 +39,95 @@
         {
             "name": "local_library_debug",
             "description": "Library files are installed inside build-directory",
-            "inherits" : ["local","default_template_debug"],
+            "inherits": [
+                "local",
+                "default_template_debug"
+            ],
             "hidden": false,
             "cacheVariables": {
-                "BUILD_PHASE" : "library"
+                "BUILD_PHASE": "library"
             }
         },
         {
             "name": "local_application_debug",
             "description": "Library files are installed inside build-directory",
-            "inherits" : ["local","default_template_debug"],
+            "inherits": [
+                "local",
+                "default_template_debug"
+            ],
             "hidden": false,
             "cacheVariables": {
-                "BUILD_PHASE" : "app"
+                "BUILD_PHASE": "app"
             }
         },
         {
             "name": "local_library_release",
             "description": "Local library to install-folder with release",
-            "inherits" : ["local","default_template_release"],
+            "inherits": [
+                "local",
+                "default_template_release"
+            ],
             "hidden": false,
             "cacheVariables": {
-                "BUILD_PHASE" : "library"
+                "BUILD_PHASE": "library"
             }
         },
         {
             "name": "local_application_release",
             "description": "Local app to install-folder with release",
-            "inherits" : ["local","default_template_release"],
+            "inherits": [
+                "local",
+                "default_template_release"
+            ],
             "hidden": false,
             "cacheVariables": {
-                "BUILD_PHASE" : "app"
+                "BUILD_PHASE": "app"
             }
         }
-
+    ],
+    "buildPresets": [
+        {
+            "name": "local_library_debug-build",
+            "configurePreset": "local_library_debug"
+        },
+        {
+            "name": "local_library_debug-install",
+            "configurePreset": "local_library_debug",
+            "targets": "install"
+        },
+        {
+            "name": "local_application_debug-build",
+            "configurePreset": "local_application_debug"
+        }
+    ],
+    "workflowPresets": [
+        {
+            "name": "lib",
+            "description": "Build both embedded firmware and simulation",
+            "steps": [
+                {
+                    "type": "configure",
+                    "name": "local_library_debug"
+                },
+                {
+                    "type": "build",
+                    "name": "local_library_debug-install"
+                }
+            ]
+        },
+        {
+            "name": "app",
+            "description": "Build both embedded firmware and simulation",
+            "steps": [
+                {
+                    "type": "configure",
+                    "name": "local_application_debug"
+                },
+                {
+                    "type": "build",
+                    "name": "local_application_debug-build"
+                }
+            ]
+        }
     ]
 }
