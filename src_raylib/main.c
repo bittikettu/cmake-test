@@ -13,17 +13,20 @@
 // Display geometry: everything is drawn into a small offscreen texture and
 // scaled up so the pixels stay chunky.
 //----------------------------------------------------------------------------
-#define VIRT_W 480
-#define VIRT_H 300
+// VT323 (DEC VT320 terminal font, OFL) embedded via xxd; native cell is 8x16.
+#include "vt323_data.h"
+
+#define VIRT_W 536
+#define VIRT_H 352
 #define SCALE 2
 #define BEZEL 28
-#define FONT_SZ 10
-#define CELL_W 7
-#define CELL_H 12
+#define FONT_SZ 16
+#define CELL_W 8
+#define CELL_H 16
 #define PAD_X 12
 #define PAD_Y 8
 #define COLS 64
-#define VISROWS 22 // scrollback rows shown above the input line
+#define VISROWS 20 // scrollback rows shown above the input line
 
 #define MAX_LINES 400
 #define INPUT_MAX 48
@@ -475,10 +478,11 @@ static void run_command(char *cmdline) {
 //----------------------------------------------------------------------------
 // Rendering helpers
 //----------------------------------------------------------------------------
+static Font termFont;
+
 static void draw_mono(const char *s, int x, int y, Color c) {
-	Font f = GetFontDefault();
 	for (; *s; s++, x += CELL_W)
-		if (*s != ' ') DrawTextCodepoint(f, *s, (Vector2) {(float) x, (float) y}, FONT_SZ, c);
+		if (*s != ' ') DrawTextCodepoint(termFont, *s, (Vector2) {(float) x, (float) y}, FONT_SZ, c);
 }
 
 int main(void) {
@@ -491,6 +495,9 @@ int main(void) {
 
 	RenderTexture2D virt = LoadRenderTexture(VIRT_W, VIRT_H);
 	SetTextureFilter(virt.texture, TEXTURE_FILTER_POINT);
+
+	termFont = LoadFontFromMemory(".ttf", VT323_Regular_ttf, (int) VT323_Regular_ttf_len, FONT_SZ, NULL, 0);
+	SetTextureFilter(termFont.texture, TEXTURE_FILTER_POINT);
 
 	const Color PHOSPHOR = (Color) {110, 255, 215, 255}; // VFD blue-green
 	const Color PHOS_DIM = (Color) {60, 160, 140, 255};
@@ -660,6 +667,7 @@ int main(void) {
 		EndDrawing();
 	}
 
+	UnloadFont(termFont);
 	UnloadRenderTexture(virt);
 	CloseWindow();
 	return 0;
