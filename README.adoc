@@ -1,40 +1,127 @@
-= CMake-Test
+= VFD-9000 — a terminal escape room
 viidakkovekara@gmail.com
 :toc:
 :toc-title: Table of Contents
 
 == Introduction
 
-Simple project to utilize CMake + Clang + Unity + Jansson to create modular structure for a project.
-It has a nice test suite to verify the correctness of the implemented functions.
+VFD-9000 is a single-player escape room played inside a fake unix shell that
+is rendered to look like an old vacuum fluorescent display — phosphor glow,
+curved glass, scanlines and flicker, all driven by a CRT post-processing
+shader. You wake up locked in the cold storage of *Koivu & Sons*; the only
+way out is the door keypad and a dusty terminal. Explore the virtual
+filesystem, decrypt the clue files, load the bolt driver, and let yourself
+out.
 
-== Features
-- Modular structure for a project.
-- Test suite to verify the correctness of the implemented functions.
+Written in C99 with https://www.raylib.com/[raylib]. The project also doubles
+as a modular CMake scaffold (git-derived versioning, a `BUILD_PHASE`
+library/app switch).
 
 == Requirements
-- List the prerequisites needed to run or build the project:
-- CMake + Clang (LLVM) + Unity + Jansson
-- Some of the Unity and Jansson are installed using FetchContent of the CMake.
 
-== Build Process
-1. Clone the repository:
-2. Install dependencies:
-3. Configure and build the project using CMake.
+* CMake (>= 3.20) and a build generator (Ninja).
+* A C compiler — the presets use Clang/LLVM.
+* `git` and `git-lfs` (the boot audio is stored via Git LFS, see below).
+* raylib is fetched and built automatically through CMake `FetchContent`; no
+  manual install is required.
 
-== Testing
-The project includes a test suite to verify the correctness of the implemented functions.
+On Linux, install the X11/Wayland/GL development packages raylib needs, e.g.
+on Debian/Ubuntu:
 
-== How to start
-[source,bash]
+[source,sh]
 ----
-cmake --preset default
-cd build
-ninja
-ninja test
+sudo apt install build-essential cmake ninja-build git git-lfs pkg-config \
+    libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+    libgl1-mesa-dev libglu1-mesa-dev libwayland-dev libxkbcommon-dev \
+    wayland-protocols
 ----
+
+== Git LFS
+
+The boot chime `src_raylib/boot.mp3` is tracked with
+https://git-lfs.com/[Git LFS] (see `.gitattributes`). Install LFS once before
+cloning so the real audio is pulled instead of a pointer file:
+
+[source,sh]
+----
+git lfs install
+git clone git@github.com:bittikettu/cmake-test.git
+----
+
+If you cloned before installing LFS, run `git lfs pull` to fetch the audio.
+
+== Build and run
+
+The build presets live in `CMakePresets.json` (Ninja + Clang).
+
+[source,sh]
+----
+# Release build (what you normally run)
+cmake --preset local_application_release
+cmake --build build/local_application_release
+build/local_application_release/src_raylib/modular_cmake-raylib-app.exe
+
+# Debug build, one shot (configure + build)
+cmake --workflow --preset app
+----
+
+raylib is compiled on the first configure (slow once, cached after). The
+terminal font is embedded in the binary; `boot.mp3` is copied next to the
+executable at build time, so the only runtime asset travels with the binary.
+
+== How to play
+
+1. Boot: an 8-second *Koivu & Sons* splash plays over the boot chime, then the
+   terminal runs its self-test.
+2. Pick a *service cartridge* (escape room) from the menu.
+3. Log in with the account that sets your difficulty:
++
+[cols="1,4"]
+|===
+| `n00b` | guided — files tell you which command to use next
+| `l33t` | no hints, no `help` — relies on your own unix knowledge
+|===
+4. Use the shell (`ls`, `cat`, `grep`, `tar -xf`, `base64 -d`, `rot13`,
+   `modprobe`, `dmesg`, `lsmod`, ...) to recover the 4-digit door code and
+   satisfy the room's gate, then `unlock <code>`.
+
+[cols="1,3"]
+|===
+| typing + Enter | shell / menu input
+| Up / Down      | command history
+| Mouse wheel, PgUp / PgDn | scrollback
+| F11 or Alt+Enter | fullscreen toggle
+| Esc            | power off (quits)
+|===
+
+== Architecture
+
+The game lives in `src_raylib/` and is split along an *engine vs. content*
+seam so new rooms can be added as data without touching engine code.
+
+* `room.h` — the contract: `FsNode` (virtual-filesystem entry), the `Room`
+  struct, the gate-flag enum, the cartridge registry, and the engine helpers
+  a room may call.
+* `main.c` — the room-agnostic engine: terminal scrollback and teletype
+  reveal, the CRT/VFD rendering and shader, the command interpreter, and the
+  `SPLASH -> BOOT -> SELECT -> LOGIN -> SHELL -> WIN` state machine. All
+  filesystem access goes through the active room.
+* `rooms.c` — the content packs. Each room is one `Room` struct plus two short
+  functions (`build_secrets`, `apply_difficulty`), registered in `g_rooms[]`.
+  The "Cold Storage" block is the working example and the template for new
+  rooms.
+
+To add a room: copy the Cold Storage block in `rooms.c`, rewrite its
+filesystem table and text, and append it to `g_rooms[]` — it appears in the
+boot menu automatically. The puzzle gate is data (`winFlags` plus an optional
+`modprobe` module gate), so most rooms need no engine changes. See `CLAUDE.md`
+and `src_raylib/README.md` for more detail.
 
 == Contributing
-Contributions are welcome! Please feel free to submit pull requests or open issues on the GitHub repository.
 
-WARNING: AI has been used to generate parts of this project. Local modles and online models. The content is not directly written by humans. Please be aware that the generated content may contain errors or inaccuracies. Always verify the information before using it. If you have any questions, feel free to ask.
+Contributions are welcome — please open issues or pull requests on GitHub.
+
+WARNING: AI has been used to generate parts of this project, with both local
+and online models. The content is not directly written by humans and may
+contain errors or inaccuracies. Always verify the information before relying
+on it.
