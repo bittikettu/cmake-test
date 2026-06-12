@@ -35,7 +35,7 @@ FetchContent_MakeAvailable(raylib)
 
 #set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
 file(GLOB_RECURSE  SOURCE_FILES "${CMAKE_SOURCE_DIR}/lib/*.c")
-set(SRC_FILES main.c ${SOURCE_FILES})
+set(SRC_FILES main.c rooms.c ${SOURCE_FILES})
 include_directories(${CMAKE_SOURCE_DIR}/lib/)
 include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})

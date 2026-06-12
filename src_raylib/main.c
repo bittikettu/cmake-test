@@ -1,5 +1,7 @@
-// VFD-9000 — an escape room in a fake unix shell, rendered like an old
-// vacuum fluorescent display. Find the 4-digit door code, type: unlock <code>
+// VFD-9000 — an escape-room engine in a fake unix shell, rendered like an old
+// vacuum fluorescent display. The rooms ("cartridges") live in rooms.c; this
+// file is the engine: terminal, command set, gate/win logic, and rendering.
+// Find the 4-digit door code, satisfy the room's gate, then: unlock <code>
 #define _CRT_SECURE_NO_WARNINGS
 #include <math.h>
 #include <raylib.h>
@@ -8,6 +10,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <version.h>
+
+#include "room.h"
 
 //----------------------------------------------------------------------------
 // Display geometry: everything is drawn into a small offscreen texture and
@@ -32,7 +36,12 @@
 #define INPUT_MAX 48
 #define HIST_MAX 16
 
-static char doorCode[5] = "0000"; // rolled fresh on every boot
+//----------------------------------------------------------------------------
+// Active session state (engine-owned; the room supplies the content)
+//----------------------------------------------------------------------------
+static Room *activeRoom = NULL;	  // selected cartridge
+static unsigned roomFlags = 0;	  // gate bits set during play
+static char doorCode[5] = "0000"; // rolled fresh on every room load
 
 //----------------------------------------------------------------------------
 // Terminal scrollback
@@ -97,116 +106,8 @@ static void term_printf(const char *fmt, ...) {
 }
 
 //----------------------------------------------------------------------------
-// Virtual filesystem
+// Filesystem access (over the active room's node table)
 //----------------------------------------------------------------------------
-typedef struct {
-	const char *path;	 // canonical absolute path, no trailing slash
-	bool isDir;
-	bool hidden;		 // needs ls -a
-	bool present;		 // false until extracted from the archive
-	bool isArchive;
-	const char *content;
-} FsNode;
-
-// kern.log grows two lines when the bolt module gets loaded
-#define KERN_LOG_BASE \
-	"[    0.00 ] vfd-kernel 0.9 booting\n" \
-	"[    0.02 ] cpu0: 8MHz detected\n" \
-	"[    0.05 ] tty1: console ready\n" \
-	"[    0.09 ] kbd80: keyboard matrix mapped\n" \
-	"[    0.14 ] vfd_core: display driver loaded, 64x20 cells\n" \
-	"[    0.22 ] doorctl: keypad controller found on tty2\n" \
-	"[    0.23 ] doorctl: WARNING bolt driver not loaded\n" \
-	"[    0.31 ] cron: daemon started"
-static const char *KERN_LOG_LOADED = KERN_LOG_BASE
-	"\n[  142.77 ] doorctl_bolt: module inserted"
-	"\n[  142.79 ] doorctl_bolt: bolt servo armed, awaiting code";
-static bool moduleLoaded = false;
-
-// n00b-mode file contents: every step names the command for the next one.
-// l33t mode swaps these for hint-free versions (see apply_hard_mode).
-#define EASY_NOTE \
-	"The door locked itself again, and management installed a\n" \
-	"'security upgrade': the keypad now needs the 4-digit code\n" \
-	"    unlock <4 digits>\n" \
-	"AND the bolt driver loaded in the kernel. Wonderful.\n" \
-	"\n" \
-	"I keep the code encrypted in my backup archive.\n" \
-	"If you forget how this shell works: help\n" \
-	"\n" \
-	"P.S. some files like to hide.  ls -a\n" \
-	"                                        - J"
-#define EASY_MEMO \
-	"MEMO (do not tape the code to the door this time)\n" \
-	"\n" \
-	"i 'encrypted' the code halves. military grade:\n" \
-	"    vault.enc is base64. decode:  base64 -d vault.enc\n" \
-	"the rest you figure out from there.\n" \
-	"                                        - J"
-// vault.enc / riddle.txt are generated at login from the rolled door code
-static char vaultEnc[512];
-static char riddleEnc[512];
-#define EASY_SCHEMATIC \
-	"DOOR CONTROL - MODEL VFD-9000\n" \
-	"  +-------------------+\n" \
-	"  |  [#] [#] [#] [#]  |\n" \
-	"  |   KEYPAD 4-DIGIT  |\n" \
-	"  +-------------------+\n" \
-	"wiring: keypad -> doorctl (tty2) -> bolt servo\n" \
-	"bolt driver:  /lib/modules/doorctl_bolt.ko\n" \
-	"load it:      modprobe doorctl_bolt\n" \
-	"verify:       dmesg  (or grep doorctl /var/log/kern.log)\n" \
-	"the bolt will NOT move unless the driver is loaded."
-#define EASY_BOOTLOG \
-	"[ 0.000 ] VFD-9000 BIOS 2.31 POST OK\n" \
-	"[ 0.041 ] cpu0: 8MHz, fpu absent\n" \
-	"[ 0.120 ] mem: 655360 bytes clean\n" \
-	"[ 0.233 ] hdd0: ST-225 21MB, spinning up\n" \
-	"[ 0.305 ] hdd0: 4 bad sectors remapped\n" \
-	"[ 0.391 ] net0: no carrier (cable chewed?)\n" \
-	"[ 0.402 ] tty1: console attached\n" \
-	"[ 0.498 ] doorctl: keypad online at tty2\n" \
-	"[ 0.511 ] doorctl: bolt engaged, autolock=ON\n" \
-	"[ 0.524 ] doorctl: bolt driver not loaded (see kern.log)\n" \
-	"[ 0.610 ] cron: janitor.sh scheduled 03:00\n" \
-	"[ 0.700 ] lpd: printer out of paper since 1986\n" \
-	"[ 0.802 ] login: guest auto-login enabled\n" \
-	"[ 0.900 ] syslogd: ready\n" \
-	"[ 0.951 ] motd: updated by management"
-
-static FsNode fs[] = {
-	{"/", true, false, true, false, NULL},
-	{"/home", true, false, true, false, NULL},
-	{"/home/guest", true, false, true, false, NULL},
-	{"/home/guest/note.txt", false, false, true, false, EASY_NOTE},
-	{"/home/guest/backup.tar", false, false, true, true,
-	 "docs/0000755 0000041 ustar  guest guest docs/memo.txt00006"
-	 "44 0000312 ustar  #@!~..%[binary sludge]..^&*  hint: this i"
-	 "s an archive. try:  tar -xf backup.tar"},
-	{"/home/guest/.hint", false, true, true, false,
-	 "you found me. archives unpack with:\n"
-	 "    tar -xf backup.tar"},
-	{"/home/guest/docs", true, false, false, false, NULL},
-	{"/home/guest/docs/memo.txt", false, false, false, false, EASY_MEMO},
-	{"/home/guest/docs/vault.enc", false, false, false, false, vaultEnc},
-	{"/home/guest/docs/riddle.txt", false, false, false, false, riddleEnc},
-	{"/home/guest/docs/door_schematic.txt", false, false, false, false, EASY_SCHEMATIC},
-	{"/var", true, false, true, false, NULL},
-	{"/var/log", true, false, true, false, NULL},
-	{"/var/log/boot.log", false, false, true, false, EASY_BOOTLOG},
-	{"/var/log/kern.log", false, false, true, false, KERN_LOG_BASE},
-	{"/lib", true, false, true, false, NULL},
-	{"/lib/modules", true, false, true, false, NULL},
-	{"/lib/modules/doorctl_bolt.ko", false, false, true, false,
-	 "ELF 8-bit LSB relocatable, vfd-kernel module 'doorctl_bolt'\n"
-	 "(this is for the kernel, not for cat. try modprobe.)"},
-	{"/etc", true, false, true, false, NULL},
-	{"/etc/motd", false, false, true, false,
-	 "PROPERTY OF KOIVU & SONS COLD STORAGE.\n"
-	 "TRESPASSERS WILL BE LOCKED IN."},
-};
-#define FS_COUNT ((int) (sizeof(fs) / sizeof(fs[0])))
-
 static char cwd[128] = "/home/guest";
 
 static void resolve_path(const char *arg, char *out, int outsz) {
@@ -240,8 +141,8 @@ static void resolve_path(const char *arg, char *out, int outsz) {
 }
 
 static FsNode *find_node(const char *path) {
-	for (int i = 0; i < FS_COUNT; i++)
-		if (fs[i].present && strcmp(fs[i].path, path) == 0) return &fs[i];
+	for (int i = 0; i < activeRoom->fsCount; i++)
+		if (activeRoom->fs[i].present && strcmp(activeRoom->fs[i].path, path) == 0) return &activeRoom->fs[i];
 	return NULL;
 }
 
@@ -258,10 +159,27 @@ static const char *base_name(const FsNode *n) {
 	return s ? s + 1 : n->path;
 }
 
+// Exposed to rooms (declared in room.h) so they can shape themselves.
+void set_content(Room *r, const char *path, const char *content) {
+	for (int i = 0; i < r->fsCount; i++)
+		if (strcmp(r->fs[i].path, path) == 0) {
+			r->fs[i].content = content;
+			return;
+		}
+}
+
+void set_present(Room *r, const char *path, bool present) {
+	for (int i = 0; i < r->fsCount; i++)
+		if (strcmp(r->fs[i].path, path) == 0) {
+			r->fs[i].present = present;
+			return;
+		}
+}
+
 //----------------------------------------------------------------------------
 // Game state
 //----------------------------------------------------------------------------
-typedef enum { STATE_BOOT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
+typedef enum { STATE_BOOT, STATE_SELECT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
 static GameState state = STATE_BOOT;
 static float bootTimer = 0;
 static int bootIndex = 0;
@@ -275,24 +193,26 @@ typedef struct {
 	const char *s;
 } BootLine;
 
+// Generic terminal self-test, shared by every cartridge. Room-specific intro
+// text is printed by the room itself once a cartridge is selected.
 static const BootLine bootSeq[] = {
 	{0.3f, "VFD-9000 PERSONAL TERMINAL UNIT"},
-	{0.6f, "(c) 1985 KOIVU & SONS COLD STORAGE"},
+	{0.6f, "(c) 1985 KOIVU & SONS SYSTEMS"},
 	{0.9f, ""},
 	{1.4f, "BIOS 2.31 .......... OK"},
 	{2.0f, "MEMORY TEST 640K ... OK"},
-	{2.7f, "DOOR CONTROL ....... ONLINE (LOCKED)"},
+	{2.7f, "SCANNING SERVICE BUS  OK"},
 	{3.2f, "LOADING SHELL ...... OK"},
 	{3.4f, ""},
-	{3.8f, "THE DOOR HAS AUTO-LOCKED BEHIND YOU."},
-	{4.2f, ""},
-	{4.6f, "ACCOUNTS:  n00b (guided)    l33t (you are on your own)"},
-	{4.8f, ""},
 };
 #define BOOT_COUNT ((int) (sizeof(bootSeq) / sizeof(bootSeq[0])))
 
 static void prompt_str(char *out, int outsz) {
 	char shown[128];
+	if (state == STATE_SELECT) {
+		snprintf(out, outsz, "load cartridge: ");
+		return;
+	}
 	if (state == STATE_LOGIN) {
 		snprintf(out, outsz, "vfd-9000 login: ");
 		return;
@@ -305,20 +225,9 @@ static void prompt_str(char *out, int outsz) {
 }
 
 //----------------------------------------------------------------------------
-// Difficulty: l33t mode swaps file contents for hint-free versions
+// Text transforms shared with rooms (declared in room.h)
 //----------------------------------------------------------------------------
-static FsNode *find_node_any(const char *path) { // ignores 'present'
-	for (int i = 0; i < FS_COUNT; i++)
-		if (strcmp(fs[i].path, path) == 0) return &fs[i];
-	return NULL;
-}
-
-static void set_content(const char *path, const char *content) {
-	FsNode *n = find_node_any(path);
-	if (n) n->content = content;
-}
-
-static void rot13_buf(const char *in, char *out, int outsz) {
+void rot13_buf(const char *in, char *out, int outsz) {
 	int len = 0;
 	for (const char *p = in; *p && len < outsz - 1; p++) {
 		char c = *p;
@@ -329,7 +238,7 @@ static void rot13_buf(const char *in, char *out, int outsz) {
 	out[len] = '\0';
 }
 
-static void b64encode(const char *in, char *out, int outsz) {
+void b64encode(const char *in, char *out, int outsz) {
 	static const char tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	int len = (int) strlen(in), o = 0, col = 0;
 	for (int i = 0; i < len && o < outsz - 6; i += 3) {
@@ -347,108 +256,6 @@ static void b64encode(const char *in, char *out, int outsz) {
 		}
 	}
 	out[o] = '\0';
-}
-
-// Regenerate vault.enc and riddle.txt from the current door code. The second
-// half is spelled out in words so the digits don't survive rot13 readably.
-static void build_secret_files(void) {
-	static const char *WORD[10] = {"ZERO", "ONE", "TWO",   "THREE", "FOUR",
-								   "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"};
-	char plain[256];
-	if (hardMode)
-		snprintf(plain, sizeof plain, "FIRST HALF OF THE DOOR CODE: %.2s\nthe rest is in riddle.txt\n", doorCode);
-	else
-		snprintf(plain, sizeof plain,
-				 "FIRST HALF OF THE DOOR CODE: %.2s\n"
-				 "the second half is in riddle.txt, but i rot13'd it.\n"
-				 "decode:  rot13 riddle.txt\n",
-				 doorCode);
-	b64encode(plain, vaultEnc, sizeof vaultEnc);
-
-	if (hardMode)
-		snprintf(plain, sizeof plain, "SECOND HALF OF THE DOOR CODE: %s %s", WORD[doorCode[2] - '0'],
-				 WORD[doorCode[3] - '0']);
-	else
-		snprintf(plain, sizeof plain,
-				 "SECOND HALF OF THE DOOR CODE: %s %s\n"
-				 "if the keypad whines about a missing driver, read\n"
-				 "docs/door_schematic.txt",
-				 WORD[doorCode[2] - '0'], WORD[doorCode[3] - '0']);
-	rot13_buf(plain, riddleEnc, sizeof riddleEnc);
-}
-
-static void apply_hard_mode(void) {
-	set_content("/home/guest/note.txt",
-				"The door needs the 4-digit code AND the bolt driver.\n"
-				"The code is encrypted in my backup archive.\n"
-				"Good luck.\n"
-				"                                        - J");
-	set_content("/home/guest/docs/memo.txt",
-				"MEMO\n"
-				"\n"
-				"the code halves are in the vault and the riddle.\n"
-				"you know what to do.\n"
-				"                                        - J");
-	set_content("/home/guest/docs/door_schematic.txt",
-				"DOOR CONTROL - MODEL VFD-9000\n"
-				"  +-------------------+\n"
-				"  |  [#] [#] [#] [#]  |\n"
-				"  |   KEYPAD 4-DIGIT  |\n"
-				"  +-------------------+\n"
-				"wiring: keypad -> doorctl (tty2) -> bolt servo\n"
-				"bolt driver: /lib/modules/doorctl_bolt.ko");
-	set_content("/var/log/boot.log",
-				"[ 0.000 ] VFD-9000 BIOS 2.31 POST OK\n"
-				"[ 0.041 ] cpu0: 8MHz, fpu absent\n"
-				"[ 0.120 ] mem: 655360 bytes clean\n"
-				"[ 0.233 ] hdd0: ST-225 21MB, spinning up\n"
-				"[ 0.305 ] hdd0: 4 bad sectors remapped\n"
-				"[ 0.391 ] net0: no carrier (cable chewed?)\n"
-				"[ 0.402 ] tty1: console attached\n"
-				"[ 0.498 ] doorctl: keypad online at tty2\n"
-				"[ 0.511 ] doorctl: bolt engaged, autolock=ON\n"
-				"[ 0.610 ] cron: janitor.sh scheduled 03:00\n"
-				"[ 0.700 ] lpd: printer out of paper since 1986\n"
-				"[ 0.802 ] login: auto-login disabled\n"
-				"[ 0.900 ] syslogd: ready\n"
-				"[ 0.951 ] motd: updated by management");
-	FsNode *hint = find_node_any("/home/guest/.hint");
-	if (hint) hint->present = false;
-}
-
-static void apply_easy_mode(void) {
-	set_content("/home/guest/note.txt", EASY_NOTE);
-	set_content("/home/guest/docs/memo.txt", EASY_MEMO);
-	set_content("/home/guest/docs/door_schematic.txt", EASY_SCHEMATIC);
-	set_content("/var/log/boot.log", EASY_BOOTLOG);
-	FsNode *hint = find_node_any("/home/guest/.hint");
-	if (hint) hint->present = true;
-}
-
-static void do_login(const char *name) {
-	char echo[COLS + 1];
-	snprintf(echo, sizeof echo, "vfd-9000 login: %s", name);
-	term_putline(echo);
-	if (strcmp(name, "n00b") == 0 || strcmp(name, "l33t") == 0) {
-		hardMode = (name[0] == 'l');
-		if (hardMode) apply_hard_mode();
-		else apply_easy_mode();
-		build_secret_files();
-		snprintf(username, sizeof username, "%s", name);
-		loginTime = GetTime();
-		state = STATE_SHELL;
-		term_print("");
-		term_print("LAST LOGIN: 4119 DAYS AGO ON tty1");
-		if (hardMode)
-			term_print("welcome, l33t. there is no help on this system.");
-		else
-			term_print("welcome, n00b. type 'help' for commands.");
-		term_print("");
-	} else if (strcmp(name, "root") == 0) {
-		term_print("root login disabled on tty1.");
-	} else if (name[0] != '\0') {
-		term_print("login incorrect");
-	}
 }
 
 //----------------------------------------------------------------------------
@@ -495,8 +302,8 @@ static void cmd_ls(int argc, char **argv) {
 	}
 	char row[COLS + 1] = "";
 	int used = 0, shown = 0;
-	for (int i = 0; i < FS_COUNT; i++) {
-		FsNode *n = &fs[i];
+	for (int i = 0; i < activeRoom->fsCount; i++) {
+		FsNode *n = &activeRoom->fs[i];
 		if (!n->present || !in_dir(n, path)) continue;
 		if (n->hidden && !all) continue;
 		char entry[64];
@@ -604,11 +411,14 @@ static void cmd_tar(int argc, char **argv) {
 		term_printf("tar: %s: does not look like a tar archive", file);
 		return;
 	}
+	const char *pre = activeRoom->archivePrefix;
+	size_t pl = pre ? strlen(pre) : 0;
 	bool any = false;
-	for (int i = 0; i < FS_COUNT; i++) {
-		if (!fs[i].present && strncmp(fs[i].path, "/home/guest/docs", 16) == 0) {
-			fs[i].present = true;
-			term_printf("x %s%s", fs[i].path + strlen("/home/guest/"), fs[i].isDir ? "/" : "");
+	for (int i = 0; i < activeRoom->fsCount; i++) {
+		if (!activeRoom->fs[i].present && pre && strncmp(activeRoom->fs[i].path, pre, pl) == 0) {
+			activeRoom->fs[i].present = true;
+			term_printf("x %s%s", activeRoom->fs[i].path + strlen("/home/guest/"),
+						activeRoom->fs[i].isDir ? "/" : "");
 			any = true;
 		}
 	}
@@ -678,11 +488,17 @@ static void cmd_modprobe(int argc, char **argv) {
 		term_print("usage: modprobe MODULE");
 		return;
 	}
-	if (strcmp(argv[1], "doorctl_bolt") == 0 || strcmp(argv[1], "doorctl_bolt.ko") == 0) {
-		if (!moduleLoaded) {
-			moduleLoaded = true;
-			FsNode *log = find_node("/var/log/kern.log");
-			if (log) log->content = KERN_LOG_LOADED;
+	// accept "name" or "name.ko"
+	char name[64];
+	snprintf(name, sizeof name, "%s", argv[1]);
+	size_t nl = strlen(name);
+	if (nl > 3 && strcmp(name + nl - 3, ".ko") == 0) name[nl - 3] = '\0';
+
+	if (activeRoom->gateModule && strcmp(name, activeRoom->gateModule) == 0) {
+		if (!(roomFlags & activeRoom->gateFlag)) {
+			roomFlags |= activeRoom->gateFlag;
+			if (activeRoom->gateLogPath)
+				set_content(activeRoom, activeRoom->gateLogPath, activeRoom->gateLogLoaded);
 		}
 		// like the real thing: silence. check the log to be sure.
 	} else {
@@ -694,7 +510,8 @@ static void cmd_lsmod(void) {
 	term_print("Module          Size  Used by");
 	term_print("vfd_core       12288  1");
 	term_print("kbd80           4096  0");
-	if (moduleLoaded) term_print("doorctl_bolt    8192  0");
+	if (activeRoom->gateModule && (roomFlags & activeRoom->gateFlag) && activeRoom->gateLsmod)
+		term_print(activeRoom->gateLsmod);
 }
 
 static void cmd_unlock(int argc, char **argv) {
@@ -703,36 +520,28 @@ static void cmd_unlock(int argc, char **argv) {
 		return;
 	}
 	term_print("doorctl: transmitting code to keypad ...");
-	if (strcmp(argv[1], doorCode) == 0 && !moduleLoaded) {
-		term_print("doorctl: CODE ACCEPTED");
-		term_print("doorctl: ERROR: bolt servo not responding");
-		if (!hardMode) term_print("doorctl: bolt driver missing from kernel (lsmod?)");
-		return;
-	}
-	if (strcmp(argv[1], doorCode) == 0) {
-		term_print("doorctl: CODE ACCEPTED");
-		term_print("doorctl_bolt: signal received");
-		term_print("doorctl: bolt retracting .........");
-		term_print("");
-		term_print("        #   # #   # #      ###   #### #   # ##### #### ");
-		term_print("        #   # ##  # #     #   # #     #  #  #     #   #");
-		term_print("        #   # # # # #     #   # #     ###   ###   #   #");
-		term_print("        #   # #  ## #     #   # #     #  #  #     #   #");
-		term_print("         ###  #   # #####  ###   #### #   # ##### #### ");
-		term_print("");
-		term_print("cold air. daylight. you are out.");
-		int t = (int) (GetTime() - loginTime);
-		if (t >= 3600)
-			term_printf("time to escape: %d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60);
-		else
-			term_printf("time to escape: %02d:%02d", t / 60, t % 60);
-		term_print("press ESC to power off the terminal.");
-		state = STATE_WIN;
-	} else {
+	bool codeOk = strcmp(argv[1], doorCode) == 0;
+	bool gated = (roomFlags & activeRoom->winFlags) == activeRoom->winFlags;
+	if (!codeOk) {
 		wrongTries++;
 		term_print("doorctl: ACCESS DENIED");
 		if (wrongTries == 3) term_print("doorctl: ALARM TRIGGERED ... just kidding. keep trying.");
+		return;
 	}
+	term_print("doorctl: CODE ACCEPTED");
+	if (!gated) {
+		if (activeRoom->codeMissingMsg) term_print(activeRoom->codeMissingMsg);
+		if (!hardMode && activeRoom->codeMissingHint) term_print(activeRoom->codeMissingHint);
+		return;
+	}
+	if (activeRoom->winArt) term_print(activeRoom->winArt);
+	int t = (int) (GetTime() - loginTime);
+	if (t >= 3600)
+		term_printf("time to escape: %d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60);
+	else
+		term_printf("time to escape: %02d:%02d", t / 60, t % 60);
+	term_print("press ESC to power off the terminal.");
+	state = STATE_WIN;
 }
 
 static void boot_start(void) {
@@ -746,12 +555,73 @@ static void boot_start(void) {
 	revealAcc = 0;
 	lineGlow = 0;
 	glowedLine = -1;
-	// a reboot drops loaded modules; extracted files survive on "disk"
-	moduleLoaded = false;
-	FsNode *log = find_node_any("/var/log/kern.log");
-	if (log) log->content = KERN_LOG_BASE;
-	// new door code every boot; 1000+ avoids leading-zero confusion
+	activeRoom = NULL;
+	roomFlags = 0;
+}
+
+static void print_menu(void) {
+	term_print("");
+	term_print("SERVICE CARTRIDGES DETECTED:");
+	for (int i = 0; i < g_roomCount; i++) term_printf("  %d) %s", i + 1, g_rooms[i]->title);
+	term_print("");
+	term_print("insert a number and press ENTER.");
+}
+
+// A reboot drops loaded modules and re-rolls the code; the room's static
+// node table keeps any files extracted in a previous session.
+static void load_room(Room *r) {
+	activeRoom = r;
+	roomFlags = 0;
+	wrongTries = 0;
+	snprintf(cwd, sizeof cwd, "/home/guest");
+	// new door code every load; 1000+ avoids leading-zero confusion
 	snprintf(doorCode, sizeof doorCode, "%d", GetRandomValue(1000, 9999));
+	if (r->gateLogPath) set_content(r, r->gateLogPath, r->gateLogBase);
+	term_print(r->intro);
+	term_print("");
+	term_print("ACCOUNTS:  n00b (guided)    l33t (you are on your own)");
+	term_print("");
+	state = STATE_LOGIN;
+}
+
+static void select_room(const char *sel) {
+	int idx = -1;
+	if (sel[0] >= '1' && sel[0] <= '9' && sel[1] == '\0') {
+		idx = sel[0] - '1';
+	} else {
+		for (int i = 0; i < g_roomCount; i++)
+			if (strcmp(sel, g_rooms[i]->id) == 0) idx = i;
+	}
+	if (idx < 0 || idx >= g_roomCount) {
+		term_print("no such cartridge. type the number.");
+		return;
+	}
+	load_room(g_rooms[idx]);
+}
+
+static void do_login(const char *name) {
+	char echo[COLS + 1];
+	snprintf(echo, sizeof echo, "vfd-9000 login: %s", name);
+	term_putline(echo);
+	if (strcmp(name, "n00b") == 0 || strcmp(name, "l33t") == 0) {
+		hardMode = (name[0] == 'l');
+		activeRoom->apply_difficulty(activeRoom, hardMode);
+		activeRoom->build_secrets(activeRoom, doorCode, hardMode);
+		snprintf(username, sizeof username, "%s", name);
+		loginTime = GetTime();
+		state = STATE_SHELL;
+		term_print("");
+		term_print("LAST LOGIN: 4119 DAYS AGO ON tty1");
+		if (hardMode)
+			term_print("welcome, l33t. there is no help on this system.");
+		else
+			term_print("welcome, n00b. type 'help' for commands.");
+		term_print("");
+	} else if (strcmp(name, "root") == 0) {
+		term_print("root login disabled on tty1.");
+	} else if (name[0] != '\0') {
+		term_print("login incorrect");
+	}
 }
 
 static void run_command(char *cmdline) {
@@ -777,8 +647,9 @@ static void run_command(char *cmdline) {
 	else if (strcmp(argv[0], "modprobe") == 0) cmd_modprobe(argc, argv);
 	else if (strcmp(argv[0], "lsmod") == 0) cmd_lsmod();
 	else if (strcmp(argv[0], "dmesg") == 0) {
-		FsNode *log = find_node("/var/log/kern.log");
+		FsNode *log = activeRoom->gateLogPath ? find_node(activeRoom->gateLogPath) : NULL;
 		if (log && log->content) term_print(log->content);
+		else term_print("dmesg: (no kernel log)");
 	}
 	else if (strcmp(argv[0], "unlock") == 0) cmd_unlock(argc, argv);
 	else if (strcmp(argv[0], "clear") == 0) {
@@ -862,8 +733,11 @@ int main(void) {
 				term_putline(bootSeq[bootIndex].s);
 				bootIndex++;
 			}
-			if (bootIndex == BOOT_COUNT) state = STATE_LOGIN;
-		} else if (state == STATE_SHELL || state == STATE_LOGIN) {
+			if (bootIndex == BOOT_COUNT) {
+				print_menu();
+				state = STATE_SELECT;
+			}
+		} else if (state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) {
 			int ch;
 			while ((ch = GetCharPressed()) > 0) {
 				if (ch >= 32 && ch < 127 && inputLen < INPUT_MAX) {
@@ -889,7 +763,16 @@ int main(void) {
 				inputLen = (int) strlen(input);
 			}
 			if (IsKeyPressed(KEY_ENTER) && !altDown) {
-				if (state == STATE_LOGIN) {
+				if (state == STATE_SELECT) {
+					char echo[COLS + 1];
+					snprintf(echo, sizeof echo, "load cartridge: %s", input);
+					term_putline(echo);
+					char sel[INPUT_MAX + 1];
+					snprintf(sel, sizeof sel, "%s", input);
+					input[0] = '\0';
+					inputLen = 0;
+					select_room(sel);
+				} else if (state == STATE_LOGIN) {
 					char name[INPUT_MAX + 1];
 					snprintf(name, sizeof name, "%s", input);
 					input[0] = '\0';
@@ -983,7 +866,7 @@ int main(void) {
 
 		// input line
 		int inputY = PAD_Y + VISROWS * CELL_H;
-		if ((state == STATE_SHELL || state == STATE_LOGIN) && scrollOff == 0 && !printing) {
+		if ((state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) && scrollOff == 0 && !printing) {
 			char prompt[64], lineBuf[COLS + 1];
 			prompt_str(prompt, sizeof prompt);
 			snprintf(lineBuf, sizeof lineBuf, "%s%s", prompt, input);
