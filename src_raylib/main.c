@@ -179,8 +179,10 @@ void set_present(Room *r, const char *path, bool present) {
 //----------------------------------------------------------------------------
 // Game state
 //----------------------------------------------------------------------------
-typedef enum { STATE_BOOT, STATE_SELECT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
-static GameState state = STATE_BOOT;
+typedef enum { STATE_SPLASH, STATE_BOOT, STATE_SELECT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
+static GameState state = STATE_SPLASH;
+#define SPLASH_TIME 8.0f // manufacturer logo dwell before the boot sequence
+static float splashTimer = 0;
 static float bootTimer = 0;
 static int bootIndex = 0;
 static int wrongTries = 0;
@@ -545,7 +547,8 @@ static void cmd_unlock(int argc, char **argv) {
 }
 
 static void boot_start(void) {
-	state = STATE_BOOT;
+	state = STATE_SPLASH;
+	splashTimer = 0;
 	bootTimer = 0;
 	bootIndex = 0;
 	lineCount = 0;
@@ -693,6 +696,57 @@ static void draw_mono(const char *s, int x, int y, Color c) {
 		if (*s != ' ') DrawTextCodepoint(termFont, *s, (Vector2) {(float) x, (float) y}, FONT_SZ, c);
 }
 
+static void draw_center(const char *s, int y, Color c) {
+	draw_mono(s, (VIRT_W - (int) strlen(s) * CELL_W) / 2, y, c);
+}
+
+// CRT glass shader. The flat framebuffer is sampled through a barrel-distorted
+// UV so the picture bulges like real tube glass; scanlines, vignette, chroma
+// fringing and a corner glare ride along the curve to sell the 3D surface.
+static const char *CRT_FS =
+	"#version 330\n"
+	"in vec2 fragTexCoord;\n"
+	"in vec4 fragColor;\n"
+	"out vec4 finalColor;\n"
+	"uniform sampler2D texture0;\n"
+	"uniform vec4 colDiffuse;\n"
+	"uniform vec2 uResolution;\n" // on-screen size of the glass, in pixels
+	"uniform float uBright;\n"	  // per-frame flicker multiplier
+	"const float CURVE = 16.0;\n" // smaller = more bulge
+	"const float SCAN = 0.30;\n"
+	"const float VIGN = 0.28;\n"
+	"const float CHROMA = 0.07;\n"
+	"vec2 curve(vec2 uv){\n"
+	"    uv = uv*2.0-1.0;\n"
+	"    vec2 off = abs(uv.yx)/CURVE;\n"
+	"    uv += uv*off*off;\n"
+	"    return uv*0.5+0.5;\n"
+	"}\n"
+	"void main(){\n"
+	"    vec2 uv = curve(fragTexCoord);\n"
+	"    vec2 e = smoothstep(vec2(0.0), vec2(0.006), uv)*smoothstep(vec2(0.0), vec2(0.006), 1.0-uv);\n"
+	"    float mask = e.x*e.y;\n" // black beyond the rounded tube edge
+	"    vec2 d = uv-0.5;\n"
+	"    float ca = CHROMA*dot(d,d);\n"
+	"    vec3 col;\n"
+	"    col.r = texture(texture0, uv - d*ca).r;\n"
+	"    col.g = texture(texture0, uv).g;\n"
+	"    col.b = texture(texture0, uv + d*ca).b;\n"
+	"    vec2 px = 1.5/uResolution;\n"
+	"    vec3 glow = texture(texture0, uv+vec2(px.x,0.0)).rgb + texture(texture0, uv-vec2(px.x,0.0)).rgb\n"
+	"              + texture(texture0, uv+vec2(0.0,px.y)).rgb + texture(texture0, uv-vec2(0.0,px.y)).rgb;\n"
+	"    col += glow*0.06;\n" // cheap phosphor bloom
+	"    float s = sin(uv.y*uResolution.y*3.14159);\n"
+	"    col *= 1.0 - SCAN*(0.5-0.5*s);\n"					   // scanlines
+	"    float m = 0.5+0.5*sin(uv.x*uResolution.x*1.5708);\n"
+	"    col *= 1.0 - 0.05*(1.0-m);\n"						   // faint aperture grille
+	"    col *= clamp(1.0 - VIGN*dot(d,d)*3.0, 0.0, 1.0);\n"   // vignette
+	"    vec2 g = uv-vec2(0.30,0.20);\n"
+	"    col += exp(-dot(g,g)*7.0)*0.05;\n"					   // upper-left glass glare
+	"    col *= uBright*mask;\n"
+	"    finalColor = vec4(col,1.0)*colDiffuse;\n"
+	"}\n";
+
 int main(void) {
 	const int winW = VIRT_W * SCALE + BEZEL * 2;
 	const int winH = VIRT_H * SCALE + BEZEL * 2;
@@ -701,11 +755,26 @@ int main(void) {
 	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2);
 	SetTargetFPS(60);
 
+	// Boot chime. The mp3 is copied next to the executable by CMake, so we
+	// resolve it from the app directory rather than the working directory.
+	InitAudioDevice();
+	char bootPath[1024];
+	snprintf(bootPath, sizeof bootPath, "%sboot.mp3", GetApplicationDirectory());
+	Music bootMusic = LoadMusicStream(bootPath);
+	bootMusic.looping = false;
+	if (bootMusic.frameCount > 0) PlayMusicStream(bootMusic);
+
 	RenderTexture2D virt = LoadRenderTexture(VIRT_W, VIRT_H);
-	SetTextureFilter(virt.texture, TEXTURE_FILTER_POINT);
+	// bilinear so the non-integer upscale to fullscreen stays smooth; the CRT
+	// shader re-imposes scanlines on top, so the picture still reads as a tube
+	SetTextureFilter(virt.texture, TEXTURE_FILTER_BILINEAR);
 
 	termFont = LoadFontFromMemory(".ttf", VT323_Regular_ttf, (int) VT323_Regular_ttf_len, FONT_SZ, NULL, 0);
 	SetTextureFilter(termFont.texture, TEXTURE_FILTER_POINT);
+
+	Shader crt = LoadShaderFromMemory(0, CRT_FS);
+	int locRes = GetShaderLocation(crt, "uResolution");
+	int locBright = GetShaderLocation(crt, "uBright");
 
 	const Color PHOSPHOR = (Color) {110, 255, 215, 255}; // VFD blue-green
 	const Color PHOS_DIM = (Color) {60, 160, 140, 255};
@@ -722,12 +791,16 @@ int main(void) {
 	while (!WindowShouldClose()) {
 		float dt = GetFrameTime();
 		blink += dt;
+		if (bootMusic.frameCount > 0) UpdateMusicStream(bootMusic);
 
 		bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
 		if (IsKeyPressed(KEY_F11) || (altDown && IsKeyPressed(KEY_ENTER))) ToggleBorderlessWindowed();
 
 		//------------------------------------------------------------------ update
-		if (state == STATE_BOOT) {
+		if (state == STATE_SPLASH) {
+			splashTimer += dt;
+			if (splashTimer >= SPLASH_TIME) state = STATE_BOOT;
+		} else if (state == STATE_BOOT) {
 			bootTimer += dt;
 			while (bootIndex < BOOT_COUNT && bootTimer >= bootSeq[bootIndex].t) {
 				term_putline(bootSeq[bootIndex].s);
@@ -838,6 +911,23 @@ int main(void) {
 		BeginTextureMode(virt);
 		ClearBackground(SCREEN_BG);
 
+		if (state == STATE_SPLASH) {
+			// manufacturer logo, gently brightening as the tube warms up
+			float warm = splashTimer < 1.2f ? splashTimer / 1.2f : 1.0f;
+			Color hot = Fade(PHOSPHOR, warm);
+			Color dim = Fade(PHOS_DIM, warm);
+			int cy = VIRT_H / 2;
+			draw_center("K O I V U   &   S O N S", cy - 44, hot);
+			draw_center("COLD STORAGE SYSTEMS", cy - 20, dim);
+			draw_center("PERSONAL TERMINAL UNIT", cy + 20, dim);
+			draw_center("MODEL VFD-9000", cy + 36, dim);
+			draw_center("(c) 1985", cy + 60, dim);
+			if (splashTimer > 1.2f && fmodf(blink, 1.0f) < 0.6f)
+				draw_center("INITIALIZING ...", cy + 92, hot);
+			EndTextureMode();
+			goto compose;
+		}
+
 		int first = shown - VISROWS - scrollOff;
 		if (first < 0) first = 0;
 		int y = PAD_Y;
@@ -880,59 +970,75 @@ int main(void) {
 		}
 		EndTextureMode();
 
+	compose:;
 		//------------------------------------------------------------------ compose to screen
-		// integer scale that fits the current window, display centered
+		// proportional scale: the glass grows to fill the window/screen,
+		// keeping aspect ratio, with a thin margin left for the case bezel
 		int sw = GetScreenWidth(), sh = GetScreenHeight();
-		int scale = (sw - BEZEL * 2) / VIRT_W;
-		int scaleV = (sh - BEZEL * 2) / VIRT_H;
+		float scale = (float) (sw - BEZEL * 2) / VIRT_W;
+		float scaleV = (float) (sh - BEZEL * 2) / VIRT_H;
 		if (scaleV < scale) scale = scaleV;
-		if (scale < 1) scale = 1;
-		int dstX = (sw - VIRT_W * scale) / 2, dstY = (sh - VIRT_H * scale) / 2;
-		Rectangle dst = {(float) dstX, (float) dstY, (float) (VIRT_W * scale), (float) (VIRT_H * scale)};
+		if (scale < 1.0f) scale = 1.0f;
+		float dw = VIRT_W * scale, dh = VIRT_H * scale;
+		Rectangle dst = {(sw - dw) / 2.0f, (sh - dh) / 2.0f, dw, dh};
 
 		BeginDrawing();
-		ClearBackground((Color) {26, 24, 22, 255});
+		ClearBackground((Color) {16, 15, 14, 255});
 
-		// bezel
-		Rectangle bezelR = {4, 4, (float) sw - 8, (float) sh - 8};
-		DrawRectangleRounded(bezelR, 0.06f, 8, (Color) {52, 48, 44, 255});
-		DrawRectangleRoundedLinesEx(bezelR, 0.06f, 8, 2.0f, (Color) {70, 66, 60, 255});
-		Rectangle screenR = {dst.x - 6, dst.y - 6, dst.width + 12, dst.height + 12};
-		DrawRectangleRounded(screenR, 0.03f, 8, (Color) {8, 10, 10, 255});
+		// ---- molded plastic case with bevel lighting (the physical housing) ----
+		Rectangle caseR = {4, 4, (float) sw - 8, (float) sh - 8};
+		DrawRectangleRounded(caseR, 0.05f, 12, (Color) {46, 43, 40, 255});
+		// top half catches the room light; a bright rim lifts the whole case
+		DrawRectangleRounded((Rectangle) {caseR.x, caseR.y, caseR.width, caseR.height * 0.5f}, 0.08f, 12,
+							 Fade((Color) {255, 250, 240, 255}, 0.04f));
+		DrawRectangleRoundedLinesEx(caseR, 0.05f, 12, 2.0f, Fade((Color) {255, 245, 235, 255}, 0.10f));
 
-		// flicker + base pass + additive glow passes
+		// recessed well the glass sinks into, with an inner shadow + top lip
+		Rectangle well = {dst.x - 14, dst.y - 14, dst.width + 28, dst.height + 28};
+		DrawRectangleRounded(well, 0.06f, 12, (Color) {7, 8, 8, 255});
+		DrawRectangleRoundedLinesEx(well, 0.06f, 12, 3.0f, Fade(BLACK, 0.65f));
+		DrawRectangleGradientV((int) well.x, (int) well.y, (int) well.width, 10,
+							   Fade((Color) {200, 220, 220, 255}, 0.10f), BLANK);
+
 		float flick = 0.93f + 0.07f * (float) GetRandomValue(0, 100) / 100.0f;
 		Rectangle src = {0, 0, (float) VIRT_W, (float) -VIRT_H};
-		DrawTexturePro(virt.texture, src, dst, (Vector2) {0, 0}, 0, Fade(WHITE, flick));
+
+		// phosphor bleed: a soft halo spilling out of the glass onto the well
 		BeginBlendMode(BLEND_ADDITIVE);
-		Rectangle glow1 = {dst.x - 2, dst.y - 2, dst.width + 4, dst.height + 4};
-		Rectangle glow2 = {dst.x - 5, dst.y - 5, dst.width + 10, dst.height + 10};
-		DrawTexturePro(virt.texture, src, glow1, (Vector2) {0, 0}, 0, Fade(WHITE, 0.28f * flick));
-		DrawTexturePro(virt.texture, src, glow2, (Vector2) {0, 0}, 0, Fade(WHITE, 0.10f * flick));
+		DrawRectangleRounded((Rectangle) {dst.x - 7, dst.y - 7, dst.width + 14, dst.height + 14}, 0.06f, 12,
+							 Fade((Color) {40, 130, 110, 255}, 0.10f * flick));
 		EndBlendMode();
 
-		// scanlines
-		for (int sy = (int) dst.y; sy < (int) (dst.y + dst.height); sy += 3)
-			DrawRectangle((int) dst.x, sy, (int) dst.width, 1, Fade(BLACK, 0.28f));
+		// ---- the glass: curved CRT shader pass ----
+		Vector2 res = {dst.width, dst.height};
+		SetShaderValue(crt, locRes, &res, SHADER_UNIFORM_VEC2);
+		SetShaderValue(crt, locBright, &flick, SHADER_UNIFORM_FLOAT);
+		BeginShaderMode(crt);
+		DrawTexturePro(virt.texture, src, dst, (Vector2) {0, 0}, 0, WHITE);
+		EndShaderMode();
 
-		// vignette
-		DrawRectangleGradientV((int) dst.x, (int) dst.y, (int) dst.width, 24, Fade(BLACK, 0.35f), BLANK);
-		DrawRectangleGradientV((int) dst.x, (int) (dst.y + dst.height) - 24, (int) dst.width, 24, BLANK,
-							   Fade(BLACK, 0.35f));
-		DrawRectangleGradientH((int) dst.x, (int) dst.y, 24, (int) dst.height, Fade(BLACK, 0.30f), BLANK);
-		DrawRectangleGradientH((int) (dst.x + dst.width) - 24, (int) dst.y, 24, (int) dst.height, BLANK,
-							   Fade(BLACK, 0.30f));
+		// four corner screws sell the molded unit
+		for (int i = 0; i < 4; i++) {
+			Vector2 sc = {caseR.x + (i & 1 ? caseR.width - 16 : 16),
+						  caseR.y + (i & 2 ? caseR.height - 16 : 16)};
+			DrawCircleV(sc, 4, (Color) {24, 22, 20, 255});
+			DrawCircleV((Vector2) {sc.x - 1, sc.y - 1}, 2, (Color) {90, 86, 80, 255});
+		}
 
 		// bezel furniture: label + power LED
 		DrawText("VFD-9000", sw - 96, sh - 20, 10, (Color) {120, 112, 100, 255});
 		DrawText("v" PROJECT_VERSION "  F11 fullscreen", 12, sh - 20, 10, (Color) {90, 84, 76, 255});
 		Color led = state == STATE_WIN ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
-		if (state == STATE_BOOT && fmodf(blink, 0.4f) < 0.2f) led = (Color) {120, 60, 30, 255};
+		if ((state == STATE_BOOT || state == STATE_SPLASH) && fmodf(blink, 0.4f) < 0.2f)
+			led = (Color) {120, 60, 30, 255};
 		DrawCircle(sw / 2, sh - 14, 4, led);
 
 		EndDrawing();
 	}
 
+	if (bootMusic.frameCount > 0) UnloadMusicStream(bootMusic);
+	CloseAudioDevice();
+	UnloadShader(crt);
 	UnloadFont(termFont);
 	UnloadRenderTexture(virt);
 	CloseWindow();

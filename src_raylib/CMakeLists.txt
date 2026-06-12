@@ -41,3 +41,9 @@ include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})
 
 target_link_libraries(${APP_NAME} PRIVATE raylib)
+
+# Stage the boot chime next to the executable so it loads at runtime.
+add_custom_command(TARGET ${APP_NAME} POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3"
+    "$<TARGET_FILE_DIR:${APP_NAME}>/boot.mp3")
