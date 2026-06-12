@@ -52,13 +52,16 @@ if(EMSCRIPTEN)
   # boot.mp3 is packed into the .data bundle via --preload-file, and the
   # default shell is replaced with our minimal full-screen canvas page.
   set_target_properties(${APP_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
+  # NOTE: each --preload-file/--shell-file is wrapped in SHELL: so CMake keeps
+  # the flag and its path together and does NOT de-duplicate the repeated
+  # --preload-file flag (otherwise the second path is dropped as a stray input).
   target_link_options(${APP_NAME} PRIVATE
     "-sUSE_GLFW=3"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sASYNCIFY"
-    "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3@boot.mp3"
-    "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses@separated_keypresses"
-    "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
+    "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3@boot.mp3"
+    "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses@separated_keypresses"
+    "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
   set_target_properties(${APP_NAME} PROPERTIES LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3")
 else()
