@@ -108,21 +108,67 @@ static const char *KERN_LOG_LOADED = KERN_LOG_BASE
 	"\n[  142.79 ] doorctl_bolt: bolt servo armed, awaiting code";
 static bool moduleLoaded = false;
 
+// n00b-mode file contents: every step names the command for the next one.
+// l33t mode swaps these for hint-free versions (see apply_hard_mode).
+#define EASY_NOTE \
+	"The door locked itself again, and management installed a\n" \
+	"'security upgrade': the keypad now needs the 4-digit code\n" \
+	"    unlock <4 digits>\n" \
+	"AND the bolt driver loaded in the kernel. Wonderful.\n" \
+	"\n" \
+	"I keep the code encrypted in my backup archive.\n" \
+	"If you forget how this shell works: help\n" \
+	"\n" \
+	"P.S. some files like to hide.  ls -a\n" \
+	"                                        - J"
+#define EASY_MEMO \
+	"MEMO (do not tape the code to the door this time)\n" \
+	"\n" \
+	"i 'encrypted' the code halves. military grade:\n" \
+	"    vault.enc is base64. decode:  base64 -d vault.enc\n" \
+	"the rest you figure out from there.\n" \
+	"                                        - J"
+#define EASY_VAULT \
+	"RklSU1QgSEFMRiBPRiBUSEUgRE9PUiBDT0RFOiA0Nwp0aGUgc2Vjb25kIGhh\n" \
+	"bGYgaXMgaW4gcmlkZGxlLnR4dCwgYnV0IGkgcm90MTMnZCBpdC4KZGVjb2Rl\n" \
+	"OiAgcm90MTMgcmlkZGxlLnR4dAo="
+#define EASY_RIDDLE \
+	"FRPBAQ UNYS BS GUR QBBE PBQR: GUERR BAR\n" \
+	"vs gur xrlcnq juvarf nobhg n zvffvat qevire, ernq\n" \
+	"qbpf/qbbe_fpurzngvp.gkg"
+#define EASY_SCHEMATIC \
+	"DOOR CONTROL - MODEL VFD-9000\n" \
+	"  +-------------------+\n" \
+	"  |  [#] [#] [#] [#]  |\n" \
+	"  |   KEYPAD 4-DIGIT  |\n" \
+	"  +-------------------+\n" \
+	"wiring: keypad -> doorctl (tty2) -> bolt servo\n" \
+	"bolt driver:  /lib/modules/doorctl_bolt.ko\n" \
+	"load it:      modprobe doorctl_bolt\n" \
+	"verify:       dmesg  (or grep doorctl /var/log/kern.log)\n" \
+	"the bolt will NOT move unless the driver is loaded."
+#define EASY_BOOTLOG \
+	"[ 0.000 ] VFD-9000 BIOS 2.31 POST OK\n" \
+	"[ 0.041 ] cpu0: 8MHz, fpu absent\n" \
+	"[ 0.120 ] mem: 655360 bytes clean\n" \
+	"[ 0.233 ] hdd0: ST-225 21MB, spinning up\n" \
+	"[ 0.305 ] hdd0: 4 bad sectors remapped\n" \
+	"[ 0.391 ] net0: no carrier (cable chewed?)\n" \
+	"[ 0.402 ] tty1: console attached\n" \
+	"[ 0.498 ] doorctl: keypad online at tty2\n" \
+	"[ 0.511 ] doorctl: bolt engaged, autolock=ON\n" \
+	"[ 0.524 ] doorctl: bolt driver not loaded (see kern.log)\n" \
+	"[ 0.610 ] cron: janitor.sh scheduled 03:00\n" \
+	"[ 0.700 ] lpd: printer out of paper since 1986\n" \
+	"[ 0.802 ] login: guest auto-login enabled\n" \
+	"[ 0.900 ] syslogd: ready\n" \
+	"[ 0.951 ] motd: updated by management"
+
 static FsNode fs[] = {
 	{"/", true, false, true, false, NULL},
 	{"/home", true, false, true, false, NULL},
 	{"/home/guest", true, false, true, false, NULL},
-	{"/home/guest/note.txt", false, false, true, false,
-	 "The door locked itself again, and management installed a\n"
-	 "'security upgrade': the keypad now needs the 4-digit code\n"
-	 "    unlock <4 digits>\n"
-	 "AND the bolt driver loaded in the kernel. Wonderful.\n"
-	 "\n"
-	 "I keep the code encrypted in my backup archive.\n"
-	 "If you forget how this shell works: help\n"
-	 "\n"
-	 "P.S. some files like to hide.  ls -a\n"
-	 "                                        - J"},
+	{"/home/guest/note.txt", false, false, true, false, EASY_NOTE},
 	{"/home/guest/backup.tar", false, false, true, true,
 	 "docs/0000755 0000041 ustar  guest guest docs/memo.txt00006"
 	 "44 0000312 ustar  #@!~..%[binary sludge]..^&*  hint: this i"
@@ -131,50 +177,13 @@ static FsNode fs[] = {
 	 "you found me. archives unpack with:\n"
 	 "    tar -xf backup.tar"},
 	{"/home/guest/docs", true, false, false, false, NULL},
-	{"/home/guest/docs/memo.txt", false, false, false, false,
-	 "MEMO (do not tape the code to the door this time)\n"
-	 "\n"
-	 "i 'encrypted' the code halves. military grade:\n"
-	 "    vault.enc is base64. decode:  base64 -d vault.enc\n"
-	 "the rest you figure out from there.\n"
-	 "                                        - J"},
-	{"/home/guest/docs/vault.enc", false, false, false, false,
-	 "RklSU1QgSEFMRiBPRiBUSEUgRE9PUiBDT0RFOiA0Nwp0aGUgc2Vjb25kIGhh\n"
-	 "bGYgaXMgaW4gcmlkZGxlLnR4dCwgYnV0IGkgcm90MTMnZCBpdC4KZGVjb2Rl\n"
-	 "OiAgcm90MTMgcmlkZGxlLnR4dAo="},
-	{"/home/guest/docs/riddle.txt", false, false, false, false,
-	 "FRPBAQ UNYS BS GUR QBBE PBQR: GUERR BAR\n"
-	 "vs gur xrlcnq juvarf nobhg n zvffvat qevire, ernq\n"
-	 "qbpf/qbbe_fpurzngvp.gkg"},
-	{"/home/guest/docs/door_schematic.txt", false, false, false, false,
-	 "DOOR CONTROL - MODEL VFD-9000\n"
-	 "  +-------------------+\n"
-	 "  |  [#] [#] [#] [#]  |\n"
-	 "  |   KEYPAD 4-DIGIT  |\n"
-	 "  +-------------------+\n"
-	 "wiring: keypad -> doorctl (tty2) -> bolt servo\n"
-	 "bolt driver:  /lib/modules/doorctl_bolt.ko\n"
-	 "load it:      modprobe doorctl_bolt\n"
-	 "verify:       dmesg  (or grep doorctl /var/log/kern.log)\n"
-	 "the bolt will NOT move unless the driver is loaded."},
+	{"/home/guest/docs/memo.txt", false, false, false, false, EASY_MEMO},
+	{"/home/guest/docs/vault.enc", false, false, false, false, EASY_VAULT},
+	{"/home/guest/docs/riddle.txt", false, false, false, false, EASY_RIDDLE},
+	{"/home/guest/docs/door_schematic.txt", false, false, false, false, EASY_SCHEMATIC},
 	{"/var", true, false, true, false, NULL},
 	{"/var/log", true, false, true, false, NULL},
-	{"/var/log/boot.log", false, false, true, false,
-	 "[ 0.000 ] VFD-9000 BIOS 2.31 POST OK\n"
-	 "[ 0.041 ] cpu0: 8MHz, fpu absent\n"
-	 "[ 0.120 ] mem: 655360 bytes clean\n"
-	 "[ 0.233 ] hdd0: ST-225 21MB, spinning up\n"
-	 "[ 0.305 ] hdd0: 4 bad sectors remapped\n"
-	 "[ 0.391 ] net0: no carrier (cable chewed?)\n"
-	 "[ 0.402 ] tty1: console attached\n"
-	 "[ 0.498 ] doorctl: keypad online at tty2\n"
-	 "[ 0.511 ] doorctl: bolt engaged, autolock=ON\n"
-	 "[ 0.524 ] doorctl: bolt driver not loaded (see kern.log)\n"
-	 "[ 0.610 ] cron: janitor.sh scheduled 03:00\n"
-	 "[ 0.700 ] lpd: printer out of paper since 1986\n"
-	 "[ 0.802 ] login: guest auto-login enabled\n"
-	 "[ 0.900 ] syslogd: ready\n"
-	 "[ 0.951 ] motd: updated by management"},
+	{"/var/log/boot.log", false, false, true, false, EASY_BOOTLOG},
 	{"/var/log/kern.log", false, false, true, false, KERN_LOG_BASE},
 	{"/lib", true, false, true, false, NULL},
 	{"/lib/modules", true, false, true, false, NULL},
@@ -242,11 +251,13 @@ static const char *base_name(const FsNode *n) {
 //----------------------------------------------------------------------------
 // Game state
 //----------------------------------------------------------------------------
-typedef enum { STATE_BOOT, STATE_SHELL, STATE_WIN } GameState;
+typedef enum { STATE_BOOT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
 static GameState state = STATE_BOOT;
 static float bootTimer = 0;
 static int bootIndex = 0;
 static int wrongTries = 0;
+static bool hardMode = false;
+static char username[16] = "guest";
 
 typedef struct {
 	float t; // seconds since boot start when the line appears
@@ -262,26 +273,126 @@ static const BootLine bootSeq[] = {
 	{2.7f, "DOOR CONTROL ....... ONLINE (LOCKED)"},
 	{3.2f, "LOADING SHELL ...... OK"},
 	{3.4f, ""},
-	{3.8f, "LAST LOGIN: 4119 DAYS AGO"},
-	{4.2f, "THE DOOR HAS AUTO-LOCKED BEHIND YOU."},
-	{4.6f, "FIND THE 4-DIGIT CODE. TYPE 'help' FOR COMMANDS."},
+	{3.8f, "THE DOOR HAS AUTO-LOCKED BEHIND YOU."},
+	{4.2f, ""},
+	{4.6f, "ACCOUNTS:  n00b (guided)    l33t (you are on your own)"},
 	{4.8f, ""},
 };
 #define BOOT_COUNT ((int) (sizeof(bootSeq) / sizeof(bootSeq[0])))
 
 static void prompt_str(char *out, int outsz) {
 	char shown[128];
+	if (state == STATE_LOGIN) {
+		snprintf(out, outsz, "vfd-9000 login: ");
+		return;
+	}
 	if (strncmp(cwd, "/home/guest", 11) == 0)
 		snprintf(shown, sizeof shown, "~%s", cwd + 11);
 	else
 		snprintf(shown, sizeof shown, "%s", cwd);
-	snprintf(out, outsz, "guest@vfd:%s$ ", shown);
+	snprintf(out, outsz, "%s@vfd:%s$ ", username, shown);
+}
+
+//----------------------------------------------------------------------------
+// Difficulty: l33t mode swaps file contents for hint-free versions
+//----------------------------------------------------------------------------
+static FsNode *find_node_any(const char *path) { // ignores 'present'
+	for (int i = 0; i < FS_COUNT; i++)
+		if (strcmp(fs[i].path, path) == 0) return &fs[i];
+	return NULL;
+}
+
+static void set_content(const char *path, const char *content) {
+	FsNode *n = find_node_any(path);
+	if (n) n->content = content;
+}
+
+static void apply_hard_mode(void) {
+	set_content("/home/guest/note.txt",
+				"The door needs the 4-digit code AND the bolt driver.\n"
+				"The code is encrypted in my backup archive.\n"
+				"Good luck.\n"
+				"                                        - J");
+	set_content("/home/guest/docs/memo.txt",
+				"MEMO\n"
+				"\n"
+				"the code halves are in the vault and the riddle.\n"
+				"you know what to do.\n"
+				"                                        - J");
+	set_content("/home/guest/docs/vault.enc",
+				"RklSU1QgSEFMRiBPRiBUSEUgRE9PUiBDT0RFOiA0Nwp0aGUgcmVzdCBpcyBp\n"
+				"biByaWRkbGUudHh0Cg==");
+	set_content("/home/guest/docs/riddle.txt", "FRPBAQ UNYS BS GUR QBBE PBQR: GUERR BAR");
+	set_content("/home/guest/docs/door_schematic.txt",
+				"DOOR CONTROL - MODEL VFD-9000\n"
+				"  +-------------------+\n"
+				"  |  [#] [#] [#] [#]  |\n"
+				"  |   KEYPAD 4-DIGIT  |\n"
+				"  +-------------------+\n"
+				"wiring: keypad -> doorctl (tty2) -> bolt servo\n"
+				"bolt driver: /lib/modules/doorctl_bolt.ko");
+	set_content("/var/log/boot.log",
+				"[ 0.000 ] VFD-9000 BIOS 2.31 POST OK\n"
+				"[ 0.041 ] cpu0: 8MHz, fpu absent\n"
+				"[ 0.120 ] mem: 655360 bytes clean\n"
+				"[ 0.233 ] hdd0: ST-225 21MB, spinning up\n"
+				"[ 0.305 ] hdd0: 4 bad sectors remapped\n"
+				"[ 0.391 ] net0: no carrier (cable chewed?)\n"
+				"[ 0.402 ] tty1: console attached\n"
+				"[ 0.498 ] doorctl: keypad online at tty2\n"
+				"[ 0.511 ] doorctl: bolt engaged, autolock=ON\n"
+				"[ 0.610 ] cron: janitor.sh scheduled 03:00\n"
+				"[ 0.700 ] lpd: printer out of paper since 1986\n"
+				"[ 0.802 ] login: auto-login disabled\n"
+				"[ 0.900 ] syslogd: ready\n"
+				"[ 0.951 ] motd: updated by management");
+	FsNode *hint = find_node_any("/home/guest/.hint");
+	if (hint) hint->present = false;
+}
+
+static void apply_easy_mode(void) {
+	set_content("/home/guest/note.txt", EASY_NOTE);
+	set_content("/home/guest/docs/memo.txt", EASY_MEMO);
+	set_content("/home/guest/docs/vault.enc", EASY_VAULT);
+	set_content("/home/guest/docs/riddle.txt", EASY_RIDDLE);
+	set_content("/home/guest/docs/door_schematic.txt", EASY_SCHEMATIC);
+	set_content("/var/log/boot.log", EASY_BOOTLOG);
+	FsNode *hint = find_node_any("/home/guest/.hint");
+	if (hint) hint->present = true;
+}
+
+static void do_login(const char *name) {
+	char echo[COLS + 1];
+	snprintf(echo, sizeof echo, "vfd-9000 login: %s", name);
+	term_putline(echo);
+	if (strcmp(name, "n00b") == 0 || strcmp(name, "l33t") == 0) {
+		hardMode = (name[0] == 'l');
+		if (hardMode) apply_hard_mode();
+		else apply_easy_mode();
+		snprintf(username, sizeof username, "%s", name);
+		state = STATE_SHELL;
+		term_print("");
+		term_print("LAST LOGIN: 4119 DAYS AGO ON tty1");
+		if (hardMode)
+			term_print("welcome, l33t. there is no help on this system.");
+		else
+			term_print("welcome, n00b. type 'help' for commands.");
+		term_print("");
+	} else if (strcmp(name, "root") == 0) {
+		term_print("root login disabled on tty1.");
+	} else if (name[0] != '\0') {
+		term_print("login incorrect");
+	}
 }
 
 //----------------------------------------------------------------------------
 // Commands
 //----------------------------------------------------------------------------
 static void cmd_help(void) {
+	if (hardMode) {
+		term_print("help: not installed on this system. you chose l33t.");
+		return;
+	}
 	term_print("  help            this text");
 	term_print("  ls [-a] [DIR]   list files (-a shows hidden)");
 	term_print("  cd DIR          change directory     pwd   where am i");
@@ -536,7 +647,7 @@ static void cmd_unlock(int argc, char **argv) {
 	if (strcmp(argv[1], DOOR_CODE) == 0 && !moduleLoaded) {
 		term_print("doorctl: CODE ACCEPTED");
 		term_print("doorctl: ERROR: bolt servo not responding");
-		term_print("doorctl: bolt driver missing from kernel (lsmod?)");
+		if (!hardMode) term_print("doorctl: bolt driver missing from kernel (lsmod?)");
 		return;
 	}
 	if (strcmp(argv[1], DOOR_CODE) == 0) {
@@ -566,6 +677,10 @@ static void boot_start(void) {
 	bootIndex = 0;
 	lineCount = 0;
 	scrollOff = 0;
+	// a reboot drops loaded modules; extracted files survive on "disk"
+	moduleLoaded = false;
+	FsNode *log = find_node_any("/var/log/kern.log");
+	if (log) log->content = KERN_LOG_BASE;
 }
 
 static void run_command(char *cmdline) {
@@ -603,7 +718,7 @@ static void run_command(char *cmdline) {
 			len += snprintf(buf + len, sizeof buf - len, "%s%s", i > 1 ? " " : "", argv[i]);
 		term_print(buf);
 	}
-	else if (strcmp(argv[0], "whoami") == 0) term_print("guest (and you are staying that way)");
+	else if (strcmp(argv[0], "whoami") == 0) term_printf("%s (and you are staying that way)", username);
 	else if (strcmp(argv[0], "date") == 0) term_print("Fri Jun 13 03:14:07 1987  (clock battery dead)");
 	else if (strcmp(argv[0], "sudo") == 0)
 		term_print("guest is not in the sudoers file. this incident\nwill be reported. (to whom, exactly?)");
@@ -664,8 +779,8 @@ int main(void) {
 				term_putline(bootSeq[bootIndex].s);
 				bootIndex++;
 			}
-			if (bootIndex == BOOT_COUNT) state = STATE_SHELL;
-		} else if (state == STATE_SHELL) {
+			if (bootIndex == BOOT_COUNT) state = STATE_LOGIN;
+		} else if (state == STATE_SHELL || state == STATE_LOGIN) {
 			int ch;
 			while ((ch = GetCharPressed()) > 0) {
 				if (ch >= 32 && ch < 127 && inputLen < INPUT_MAX) {
@@ -675,12 +790,12 @@ int main(void) {
 			}
 			if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && inputLen > 0)
 				input[--inputLen] = '\0';
-			if (IsKeyPressed(KEY_UP) && histCount > 0) {
+			if (IsKeyPressed(KEY_UP) && histCount > 0 && state == STATE_SHELL) {
 				if (histPos < histCount - 1) histPos++;
 				snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
 				inputLen = (int) strlen(input);
 			}
-			if (IsKeyPressed(KEY_DOWN)) {
+			if (IsKeyPressed(KEY_DOWN) && state == STATE_SHELL) {
 				if (histPos > 0) {
 					histPos--;
 					snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
@@ -691,7 +806,13 @@ int main(void) {
 				inputLen = (int) strlen(input);
 			}
 			if (IsKeyPressed(KEY_ENTER) && !altDown) {
-				if (inputLen > 0) {
+				if (state == STATE_LOGIN) {
+					char name[INPUT_MAX + 1];
+					snprintf(name, sizeof name, "%s", input);
+					input[0] = '\0';
+					inputLen = 0;
+					do_login(name);
+				} else if (inputLen > 0) {
 					if (histCount == HIST_MAX) {
 						memmove(history[0], history[1], sizeof(history[0]) * (HIST_MAX - 1));
 						histCount--;
@@ -739,7 +860,7 @@ int main(void) {
 
 		// input line
 		int inputY = PAD_Y + VISROWS * CELL_H;
-		if (state == STATE_SHELL && scrollOff == 0) {
+		if ((state == STATE_SHELL || state == STATE_LOGIN) && scrollOff == 0) {
 			char prompt[64], lineBuf[COLS + 1];
 			prompt_str(prompt, sizeof prompt);
 			snprintf(lineBuf, sizeof lineBuf, "%s%s", prompt, input);
