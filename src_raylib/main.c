@@ -15,6 +15,7 @@
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h> // browser-driven main loop for the web build
+#include <emscripten/html5.h>	   // query the canvas CSS size for mobile scaling
 #endif
 
 //----------------------------------------------------------------------------
@@ -814,6 +815,117 @@ static const Color PHOSPHOR = {110, 255, 215, 255}; // VFD blue-green
 static const Color PHOS_DIM = {60, 160, 140, 255};
 static const Color SCREEN_BG = {3, 12, 12, 255};
 
+//----------------------------------------------------------------------------
+// On-screen keyboard (Keytronic-style). It mirrors the physical keyboard — a
+// key lights up while its real key is held — and a mouse click or touch taps
+// it, feeding the same input path. Only typing keys, ENTER and BACKSPACE emit;
+// the modifiers are decorative but still animate when pressed for real.
+//----------------------------------------------------------------------------
+typedef struct {
+	const char *label;
+	int ch;		// emitted character, 0 = none
+	int key;	// raylib keycode for physical-press animation, 0 = none
+	int action; // 0 none, 1 enter, 2 backspace
+	float w;	// width in key units
+} Key;
+
+static const Key kbR0[] = {
+	{"`", '`', KEY_GRAVE, 0, 1},  {"1", '1', KEY_ONE, 0, 1},   {"2", '2', KEY_TWO, 0, 1},
+	{"3", '3', KEY_THREE, 0, 1},  {"4", '4', KEY_FOUR, 0, 1},  {"5", '5', KEY_FIVE, 0, 1},
+	{"6", '6', KEY_SIX, 0, 1},	  {"7", '7', KEY_SEVEN, 0, 1}, {"8", '8', KEY_EIGHT, 0, 1},
+	{"9", '9', KEY_NINE, 0, 1},	  {"0", '0', KEY_ZERO, 0, 1},  {"-", '-', KEY_MINUS, 0, 1},
+	{"=", '=', KEY_EQUAL, 0, 1},  {"BKSP", 0, KEY_BACKSPACE, 2, 2},
+};
+static const Key kbR1[] = {
+	{"TAB", 0, KEY_TAB, 0, 1.5f}, {"Q", 'q', KEY_Q, 0, 1},	  {"W", 'w', KEY_W, 0, 1},
+	{"E", 'e', KEY_E, 0, 1},	  {"R", 'r', KEY_R, 0, 1},	  {"T", 't', KEY_T, 0, 1},
+	{"Y", 'y', KEY_Y, 0, 1},	  {"U", 'u', KEY_U, 0, 1},	  {"I", 'i', KEY_I, 0, 1},
+	{"O", 'o', KEY_O, 0, 1},	  {"P", 'p', KEY_P, 0, 1},	  {"[", '[', KEY_LEFT_BRACKET, 0, 1},
+	{"]", ']', KEY_RIGHT_BRACKET, 0, 1}, {"\\", '\\', KEY_BACKSLASH, 0, 1.5f},
+};
+static const Key kbR2[] = {
+	{"CAPS", 0, KEY_CAPS_LOCK, 0, 1.75f}, {"A", 'a', KEY_A, 0, 1}, {"S", 's', KEY_S, 0, 1},
+	{"D", 'd', KEY_D, 0, 1},	  {"F", 'f', KEY_F, 0, 1},	  {"G", 'g', KEY_G, 0, 1},
+	{"H", 'h', KEY_H, 0, 1},	  {"J", 'j', KEY_J, 0, 1},	  {"K", 'k', KEY_K, 0, 1},
+	{"L", 'l', KEY_L, 0, 1},	  {";", ';', KEY_SEMICOLON, 0, 1}, {"'", '\'', KEY_APOSTROPHE, 0, 1},
+	{"ENTER", 0, KEY_ENTER, 1, 2.25f},
+};
+static const Key kbR3[] = {
+	{"SHIFT", 0, KEY_LEFT_SHIFT, 0, 2.25f}, {"Z", 'z', KEY_Z, 0, 1}, {"X", 'x', KEY_X, 0, 1},
+	{"C", 'c', KEY_C, 0, 1},	  {"V", 'v', KEY_V, 0, 1},	  {"B", 'b', KEY_B, 0, 1},
+	{"N", 'n', KEY_N, 0, 1},	  {"M", 'm', KEY_M, 0, 1},	  {",", ',', KEY_COMMA, 0, 1},
+	{".", '.', KEY_PERIOD, 0, 1}, {"/", '/', KEY_SLASH, 0, 1}, {"SHIFT", 0, KEY_RIGHT_SHIFT, 0, 2.75f},
+};
+static const Key kbR4[] = {
+	{"CTRL", 0, KEY_LEFT_CONTROL, 0, 2}, {"ALT", 0, KEY_LEFT_ALT, 0, 2}, {"", ' ', KEY_SPACE, 0, 7},
+	{"ALT", 0, KEY_RIGHT_ALT, 0, 2},	 {"CTRL", 0, KEY_RIGHT_CONTROL, 0, 2},
+};
+static const Key *const kbRows[5] = {kbR0, kbR1, kbR2, kbR3, kbR4};
+static const int kbRowN[5] = {14, 14, 13, 12, 5};
+
+#define KB_MAXKEYS 64
+static const Key *flatKey[KB_MAXKEYS];
+static int flatRow[KB_MAXKEYS];
+static float flatXU[KB_MAXKEYS]; // x offset (in key units) within the row
+static int flatN;
+static float kbUnits; // width of the widest row, in key units
+
+// Synthesized input for the current frame, merged from the physical keyboard
+// and the on-screen keyboard so both drive one code path.
+static int g_chars[64];
+static int g_charN;
+static bool g_enter, g_back, g_up, g_down;
+static int g_kbHover = -1; // on-screen key under the pointer, -1 = none
+static bool g_kbDown;	   // pointer (mouse/touch) is held down
+
+static void init_keyboard(void) {
+	flatN = 0;
+	kbUnits = 0;
+	for (int r = 0; r < 5; r++) {
+		float x = 0;
+		for (int c = 0; c < kbRowN[r] && flatN < KB_MAXKEYS; c++) {
+			flatKey[flatN] = &kbRows[r][c];
+			flatRow[flatN] = r;
+			flatXU[flatN] = x;
+			flatN++;
+			x += kbRows[r][c].w;
+		}
+		if (x > kbUnits) kbUnits = x;
+	}
+}
+
+static void kb_activate(const Key *k) {
+	if (k->ch) {
+		if (g_charN < 64) g_chars[g_charN++] = k->ch;
+	} else if (k->action == 1) {
+		g_enter = true;
+	} else if (k->action == 2) {
+		g_back = true;
+	}
+}
+
+static void draw_key(Rectangle r, const Key *k, bool down) {
+	float drop = down ? r.height * 0.10f : 0.0f;
+	Rectangle face = {r.x, r.y + drop, r.width, r.height - drop};
+	// keywell shadow under the cap
+	DrawRectangleRounded((Rectangle) {r.x, r.y + r.height * 0.12f, r.width, r.height}, 0.28f, 6,
+						 (Color) {0, 0, 0, 70});
+	Color cap = down ? (Color) {178, 172, 156, 255} : (Color) {210, 204, 188, 255};
+	Color sheen = down ? (Color) {196, 190, 174, 255} : (Color) {231, 226, 211, 255};
+	DrawRectangleRounded(face, 0.28f, 6, cap);
+	// sculpted dish: a lighter inset across the upper part of the cap
+	DrawRectangleRounded((Rectangle) {face.x + face.width * 0.12f, face.y + face.height * 0.12f,
+									 face.width * 0.76f, face.height * 0.5f},
+						 0.4f, 6, sheen);
+	if (k->label && k->label[0]) {
+		int fs = (int) (r.height * 0.34f);
+		if (fs < 8) fs = 8;
+		int tw = MeasureText(k->label, fs);
+		DrawText(k->label, (int) (face.x + (face.width - tw) / 2.0f),
+				 (int) (face.y + (face.height - fs) / 2.0f), fs, (Color) {44, 41, 36, 255});
+	}
+}
+
 // One simulated frame: input, update, and the full compose-to-screen draw.
 static void UpdateDrawFrame(void) {
 		float dt = GetFrameTime();
@@ -822,6 +934,67 @@ static void UpdateDrawFrame(void) {
 
 		bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
 		if (IsKeyPressed(KEY_F11) || (altDown && IsKeyPressed(KEY_ENTER))) ToggleBorderlessWindowed();
+
+#if defined(__EMSCRIPTEN__)
+		// keep the framebuffer matched to the responsive canvas CSS size
+		{
+			double cw = 0, chh = 0;
+			if (emscripten_get_element_css_size("#canvas", &cw, &chh) == EMSCRIPTEN_RESULT_SUCCESS) {
+				int iw = (int) cw, ih = (int) chh;
+				if (iw > 0 && ih > 0 && (iw != GetScreenWidth() || ih != GetScreenHeight()))
+					SetWindowSize(iw, ih);
+			}
+		}
+#endif
+
+		//------------------------------------------------------------------ layout (glass + keyboard)
+		int sw = GetScreenWidth(), sh = GetScreenHeight();
+
+		// on-screen keyboard occupies a strip along the bottom of the case
+		float kbInteriorW = (float) (sw - BEZEL * 2);
+		float kbU = kbInteriorW / kbUnits;	  // key pitch from the available width
+		float kbMaxU = sh * 0.085f;			  // ...but cap it so it never dominates
+		if (kbU > kbMaxU) kbU = kbMaxU;
+		float kbGap = kbU * 0.12f;
+		float kbBoardW = kbUnits * kbU, kbBoardH = 5 * kbU;
+		float kbBoardX = (sw - kbBoardW) / 2.0f;
+		float kbBoardY = (float) (sh - BEZEL) - kbBoardH;
+		float kbTopY = kbBoardY - kbU * 0.5f;
+		Rectangle keyRects[KB_MAXKEYS];
+		for (int i = 0; i < flatN; i++)
+			keyRects[i] = (Rectangle) {kbBoardX + flatXU[i] * kbU, kbBoardY + flatRow[i] * kbU,
+									   flatKey[i]->w * kbU - kbGap, kbU - kbGap};
+
+		// the glass fills the area above the keyboard, keeping its aspect ratio
+		float glassTop = BEZEL;
+		float glassAreaH = (kbTopY - 6.0f) - glassTop;
+		if (glassAreaH < 40.0f) glassAreaH = 40.0f;
+		float gscale = fminf(kbInteriorW / VIRT_W, glassAreaH / VIRT_H);
+		if (gscale < 0.1f) gscale = 0.1f;
+		float dw = VIRT_W * gscale, dh = VIRT_H * gscale;
+		Rectangle dst = {(sw - dw) / 2.0f, glassTop + (glassAreaH - dh) / 2.0f, dw, dh};
+
+		//------------------------------------------------------------------ gather input (physical + on-screen)
+		g_charN = 0;
+		g_enter = g_back = g_up = g_down = false;
+		int gch;
+		while ((gch = GetCharPressed()) > 0)
+			if (gch >= 32 && gch < 127 && g_charN < 64) g_chars[g_charN++] = gch;
+		if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) g_back = true;
+		if (IsKeyPressed(KEY_ENTER) && !altDown) g_enter = true;
+		if (IsKeyPressed(KEY_UP)) g_up = true;
+		if (IsKeyPressed(KEY_DOWN)) g_down = true;
+
+		// pointer over the on-screen keyboard (mouse, or touch mapped to mouse)
+		Vector2 mp = GetMousePosition();
+		g_kbHover = -1;
+		for (int i = 0; i < flatN; i++)
+			if (CheckCollisionPointRec(mp, keyRects[i])) {
+				g_kbHover = i;
+				break;
+			}
+		g_kbDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+		if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && g_kbHover >= 0) kb_activate(flatKey[g_kbHover]);
 
 		//------------------------------------------------------------------ update
 		if (state == STATE_SPLASH) {
@@ -838,21 +1011,18 @@ static void UpdateDrawFrame(void) {
 				state = STATE_SELECT;
 			}
 		} else if (state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) {
-			int ch;
-			while ((ch = GetCharPressed()) > 0) {
-				if (ch >= 32 && ch < 127 && inputLen < INPUT_MAX) {
-					input[inputLen++] = (char) ch;
+			for (int i = 0; i < g_charN; i++)
+				if (inputLen < INPUT_MAX) {
+					input[inputLen++] = (char) g_chars[i];
 					input[inputLen] = '\0';
 				}
-			}
-			if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && inputLen > 0)
-				input[--inputLen] = '\0';
-			if (IsKeyPressed(KEY_UP) && histCount > 0 && state == STATE_SHELL) {
+			if (g_back && inputLen > 0) input[--inputLen] = '\0';
+			if (g_up && histCount > 0 && state == STATE_SHELL) {
 				if (histPos < histCount - 1) histPos++;
 				snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
 				inputLen = (int) strlen(input);
 			}
-			if (IsKeyPressed(KEY_DOWN) && state == STATE_SHELL) {
+			if (g_down && state == STATE_SHELL) {
 				if (histPos > 0) {
 					histPos--;
 					snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
@@ -862,7 +1032,7 @@ static void UpdateDrawFrame(void) {
 				}
 				inputLen = (int) strlen(input);
 			}
-			if (IsKeyPressed(KEY_ENTER) && !altDown) {
+			if (g_enter) {
 				if (state == STATE_SELECT) {
 					char echo[COLS + 1];
 					snprintf(echo, sizeof echo, "load cartridge: %s", input);
@@ -999,15 +1169,7 @@ static void UpdateDrawFrame(void) {
 
 	compose:;
 		//------------------------------------------------------------------ compose to screen
-		// proportional scale: the glass grows to fill the window/screen,
-		// keeping aspect ratio, with a thin margin left for the case bezel
-		int sw = GetScreenWidth(), sh = GetScreenHeight();
-		float scale = (float) (sw - BEZEL * 2) / VIRT_W;
-		float scaleV = (float) (sh - BEZEL * 2) / VIRT_H;
-		if (scaleV < scale) scale = scaleV;
-		if (scale < 1.0f) scale = 1.0f;
-		float dw = VIRT_W * scale, dh = VIRT_H * scale;
-		Rectangle dst = {(sw - dw) / 2.0f, (sh - dh) / 2.0f, dw, dh};
+		// (screen size, glass rect and keyboard geometry were computed at the top of the frame)
 
 		BeginDrawing();
 		ClearBackground((Color) {16, 15, 14, 255});
@@ -1052,6 +1214,16 @@ static void UpdateDrawFrame(void) {
 			DrawCircleV((Vector2) {sc.x - 1, sc.y - 1}, 2, (Color) {90, 86, 80, 255});
 		}
 
+		// ---- on-screen keyboard: dark deck with sculpted beige keycaps ----
+		Rectangle deck = {(float) BEZEL, kbTopY, (float) (sw - BEZEL * 2), (float) (sh - BEZEL) - kbTopY};
+		DrawRectangleRounded(deck, 0.05f, 8, (Color) {52, 49, 44, 255});
+		DrawRectangleRoundedLinesEx(deck, 0.05f, 8, 2.0f, Fade(BLACK, 0.5f));
+		for (int i = 0; i < flatN; i++) {
+			const Key *k = flatKey[i];
+			bool down = (k->key && IsKeyDown(k->key)) || (g_kbDown && i == g_kbHover);
+			draw_key(keyRects[i], k, down);
+		}
+
 		// bezel furniture: label + power LED
 		DrawText("VFD-9000", sw - 96, sh - 20, 10, (Color) {120, 112, 100, 255});
 		DrawText("v" PROJECT_VERSION "  F11 fullscreen", 12, sh - 20, 10, (Color) {90, 84, 76, 255});
@@ -1065,10 +1237,10 @@ static void UpdateDrawFrame(void) {
 
 int main(void) {
 	const int winW = VIRT_W * SCALE + BEZEL * 2;
-	const int winH = VIRT_H * SCALE + BEZEL * 2;
+	const int winH = VIRT_H * SCALE + BEZEL * 2 + 260; // extra room for the on-screen keyboard
 	SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
 	InitWindow(winW, winH, "VFD-9000 TERMINAL");
-	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2);
+	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2 + 160);
 #if !defined(__EMSCRIPTEN__)
 	SetTargetFPS(60); // on the web the browser's rAF drives the frame rate
 #endif
@@ -1098,6 +1270,7 @@ int main(void) {
 	locRes = GetShaderLocation(crt, "uResolution");
 	locBright = GetShaderLocation(crt, "uBright");
 
+	init_keyboard();
 	boot_start();
 
 #if defined(__EMSCRIPTEN__)

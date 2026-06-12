@@ -6,10 +6,12 @@
   <title>VFD-9000 — terminal escape room</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0a0a0a; overflow: hidden; }
-    body { display: flex; align-items: center; justify-content: center; }
-    canvas { background: #000; display: block; outline: none; }
+    /* fill the device viewport so the unit scales on phones/tablets; touch-action
+       none keeps taps from scrolling/zooming the page while typing */
+    #canvas { display: block; width: 100vw; height: 100vh; background: #000;
+              outline: none; touch-action: none; }
     #note {
-      position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
+      position: fixed; left: 0; right: 0; bottom: 6px; text-align: center;
       color: #4a6b62; font: 12px ui-monospace, monospace; opacity: .7;
       pointer-events: none; letter-spacing: .04em;
     }
