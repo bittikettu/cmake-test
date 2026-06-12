@@ -47,6 +47,11 @@ static int scrollOff = 0; // 0 = stuck to bottom
 static int revealLine = 0;
 static int revealCol = 0;
 static float revealAcc = 0;
+// Each new line glows faintly for a moment before its characters print,
+// like the phosphor energizing while the machine gets around to writing.
+#define LINE_GLOW_TIME 0.12f
+static float lineGlow = 0;
+static int glowedLine = -1;
 
 static void term_putline(const char *s) {
 	if (lineCount == MAX_LINES) {
@@ -54,6 +59,7 @@ static void term_putline(const char *s) {
 		lineCount--;
 		if (revealLine > 0) revealLine--;
 		else revealCol = 0;
+		if (glowedLine >= 0) glowedLine--;
 	}
 	snprintf(termLines[lineCount], COLS + 1, "%s", s);
 	lineCount++;
@@ -738,6 +744,8 @@ static void boot_start(void) {
 	revealLine = 0;
 	revealCol = 0;
 	revealAcc = 0;
+	lineGlow = 0;
+	glowedLine = -1;
 	// a reboot drops loaded modules; extracted files survive on "disk"
 	moduleLoaded = false;
 	FsNode *log = find_node_any("/var/log/kern.log");
@@ -773,7 +781,14 @@ static void run_command(char *cmdline) {
 		if (log && log->content) term_print(log->content);
 	}
 	else if (strcmp(argv[0], "unlock") == 0) cmd_unlock(argc, argv);
-	else if (strcmp(argv[0], "clear") == 0) { lineCount = 0; scrollOff = 0; revealLine = 0; revealCol = 0; }
+	else if (strcmp(argv[0], "clear") == 0) {
+		lineCount = 0;
+		scrollOff = 0;
+		revealLine = 0;
+		revealCol = 0;
+		lineGlow = 0;
+		glowedLine = -1;
+	}
 	else if (strcmp(argv[0], "echo") == 0) {
 		char buf[COLS + 1] = "";
 		int len = 0;
@@ -902,11 +917,25 @@ int main(void) {
 
 		// teletype reveal: the "serial line" delivers only so many chars/sec
 		if (revealLine < lineCount) {
-			revealAcc += dt * REVEAL_CPS;
-			while (revealAcc >= 1.0f && revealLine < lineCount) {
-				revealAcc -= 1.0f;
-				if (revealCol < (int) strlen(termLines[revealLine])) revealCol++;
-				else { revealLine++; revealCol = 0; } // the newline costs a char too
+			if (revealCol == 0 && glowedLine != revealLine) {
+				glowedLine = revealLine; // fresh line: glow first, print after
+				lineGlow = LINE_GLOW_TIME;
+			}
+			if (lineGlow > 0) {
+				lineGlow -= dt;
+				revealAcc = 0;
+			} else {
+				revealAcc += dt * REVEAL_CPS;
+				while (revealAcc >= 1.0f && revealLine < lineCount) {
+					revealAcc -= 1.0f;
+					if (revealCol < (int) strlen(termLines[revealLine])) {
+						revealCol++;
+					} else {
+						revealLine++; // newline: stop here so the next line glows first
+						revealCol = 0;
+						break;
+					}
+				}
 			}
 		} else {
 			revealAcc = 0;
@@ -937,6 +966,9 @@ int main(void) {
 				(unsigned char) (PHOS_DIM.g + (PHOSPHOR.g - PHOS_DIM.g) * (0.55f + 0.45f * age)),
 				(unsigned char) (PHOS_DIM.b + (PHOSPHOR.b - PHOS_DIM.b) * (0.55f + 0.45f * age)), 255};
 			if (i == revealLine && printing) {
+				if (lineGlow > 0) // the row lights up before the text arrives
+					DrawRectangle(PAD_X - 4, y - 1, COLS * CELL_W + 8, CELL_H + 2,
+								  Fade(PHOSPHOR, 0.14f * (lineGlow / LINE_GLOW_TIME)));
 				char part[COLS + 1];
 				memcpy(part, termLines[i], (size_t) revealCol);
 				part[revealCol] = '\0';
