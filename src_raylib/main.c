@@ -905,20 +905,27 @@ static void kb_activate(const Key *k) {
 }
 
 static void draw_key(Rectangle r, const Key *k, bool down) {
-	float drop = down ? r.height * 0.10f : 0.0f;
+	float drop = down ? r.height * 0.12f : 0.0f;
 	Rectangle face = {r.x, r.y + drop, r.width, r.height - drop};
 	// keywell shadow under the cap
-	DrawRectangleRounded((Rectangle) {r.x, r.y + r.height * 0.12f, r.width, r.height}, 0.28f, 6,
-						 (Color) {0, 0, 0, 70});
-	Color cap = down ? (Color) {178, 172, 156, 255} : (Color) {210, 204, 188, 255};
-	Color sheen = down ? (Color) {196, 190, 174, 255} : (Color) {231, 226, 211, 255};
-	DrawRectangleRounded(face, 0.28f, 6, cap);
+	DrawRectangleRounded((Rectangle) {r.x, r.y + r.height * 0.14f, r.width, r.height}, 0.30f, 6,
+						 (Color) {0, 0, 0, 80});
+	Color cap = down ? (Color) {176, 170, 154, 255} : (Color) {212, 206, 190, 255};
+	Color sheen = down ? (Color) {194, 188, 172, 255} : (Color) {233, 228, 214, 255};
+	DrawRectangleRounded(face, 0.30f, 6, cap);
 	// sculpted dish: a lighter inset across the upper part of the cap
 	DrawRectangleRounded((Rectangle) {face.x + face.width * 0.12f, face.y + face.height * 0.12f,
-									 face.width * 0.76f, face.height * 0.5f},
-						 0.4f, 6, sheen);
+									 face.width * 0.76f, face.height * 0.46f},
+						 0.45f, 6, sheen);
+	// homing nub on F and J, like a real keyboard
+	if (k->ch == 'f' || k->ch == 'j') {
+		float nw = face.width * 0.30f;
+		DrawRectangleRounded((Rectangle) {face.x + (face.width - nw) / 2.0f, face.y + face.height * 0.78f, nw,
+										 face.height * 0.06f + 1.0f},
+							 1.0f, 4, (Color) {120, 114, 102, 255});
+	}
 	if (k->label && k->label[0]) {
-		int fs = (int) (r.height * 0.34f);
+		int fs = (int) (r.height * 0.32f);
 		if (fs < 8) fs = 8;
 		int tw = MeasureText(k->label, fs);
 		DrawText(k->label, (int) (face.x + (face.width - tw) / 2.0f),
@@ -950,24 +957,33 @@ static void UpdateDrawFrame(void) {
 		//------------------------------------------------------------------ layout (glass + keyboard)
 		int sw = GetScreenWidth(), sh = GetScreenHeight();
 
-		// on-screen keyboard occupies a strip along the bottom of the case
-		float kbInteriorW = (float) (sw - BEZEL * 2);
-		float kbU = kbInteriorW / kbUnits;	  // key pitch from the available width
-		float kbMaxU = sh * 0.085f;			  // ...but cap it so it never dominates
+		// Compact mode (phones / small or portrait windows): drop the bulky
+		// "monitor" housing and let the glass + keyboard fill the screen.
+		bool compact = (sw < 720) || (sh < 520) || ((float) sh > (float) sw * 1.15f);
+		int margin = compact ? 5 : BEZEL;
+		float glassGap = compact ? 2.0f : 6.0f;
+
+		// on-screen keyboard occupies a strip along the bottom. Key height is
+		// decoupled from width so caps can be taller than wide (easier to tap,
+		// especially on a phone where width pins the caps small).
+		float kbInteriorW = (float) (sw - margin * 2);
+		float kbU = kbInteriorW / kbUnits;				   // horizontal key pitch from the width
+		float kbMaxU = sh * (compact ? 0.10f : 0.07f);	   // cap so caps aren't huge on big screens
 		if (kbU > kbMaxU) kbU = kbMaxU;
-		float kbGap = kbU * 0.12f;
-		float kbBoardW = kbUnits * kbU, kbBoardH = 5 * kbU;
+		float kbRowH = kbU * (compact ? 1.32f : 1.06f);	   // taller-than-wide caps tap better
+		float kbGap = kbU * 0.10f;
+		float kbBoardW = kbUnits * kbU, kbBoardH = 5 * kbRowH;
 		float kbBoardX = (sw - kbBoardW) / 2.0f;
-		float kbBoardY = (float) (sh - BEZEL) - kbBoardH;
-		float kbTopY = kbBoardY - kbU * 0.5f;
+		float kbBoardY = (float) (sh - margin) - kbBoardH;
+		float kbTopY = kbBoardY - kbU * 0.4f;
 		Rectangle keyRects[KB_MAXKEYS];
 		for (int i = 0; i < flatN; i++)
-			keyRects[i] = (Rectangle) {kbBoardX + flatXU[i] * kbU, kbBoardY + flatRow[i] * kbU,
-									   flatKey[i]->w * kbU - kbGap, kbU - kbGap};
+			keyRects[i] = (Rectangle) {kbBoardX + flatXU[i] * kbU, kbBoardY + flatRow[i] * kbRowH,
+									   flatKey[i]->w * kbU - kbGap, kbRowH - kbGap};
 
 		// the glass fills the area above the keyboard, keeping its aspect ratio
-		float glassTop = BEZEL;
-		float glassAreaH = (kbTopY - 6.0f) - glassTop;
+		float glassTop = (float) margin;
+		float glassAreaH = (kbTopY - glassGap) - glassTop;
 		if (glassAreaH < 40.0f) glassAreaH = 40.0f;
 		float gscale = fminf(kbInteriorW / VIRT_W, glassAreaH / VIRT_H);
 		if (gscale < 0.1f) gscale = 0.1f;
@@ -1172,22 +1188,24 @@ static void UpdateDrawFrame(void) {
 		// (screen size, glass rect and keyboard geometry were computed at the top of the frame)
 
 		BeginDrawing();
-		ClearBackground((Color) {16, 15, 14, 255});
+		ClearBackground(compact ? (Color) {0, 0, 0, 255} : (Color) {16, 15, 14, 255});
 
-		// ---- molded plastic case with bevel lighting (the physical housing) ----
+		// the bulky molded housing only renders on roomy (desktop) windows
 		Rectangle caseR = {4, 4, (float) sw - 8, (float) sh - 8};
-		DrawRectangleRounded(caseR, 0.05f, 12, (Color) {46, 43, 40, 255});
-		// top half catches the room light; a bright rim lifts the whole case
-		DrawRectangleRounded((Rectangle) {caseR.x, caseR.y, caseR.width, caseR.height * 0.5f}, 0.08f, 12,
-							 Fade((Color) {255, 250, 240, 255}, 0.04f));
-		DrawRectangleRoundedLinesEx(caseR, 0.05f, 12, 2.0f, Fade((Color) {255, 245, 235, 255}, 0.10f));
+		if (!compact) {
+			DrawRectangleRounded(caseR, 0.05f, 12, (Color) {46, 43, 40, 255});
+			// top half catches the room light; a bright rim lifts the whole case
+			DrawRectangleRounded((Rectangle) {caseR.x, caseR.y, caseR.width, caseR.height * 0.5f}, 0.08f, 12,
+								 Fade((Color) {255, 250, 240, 255}, 0.04f));
+			DrawRectangleRoundedLinesEx(caseR, 0.05f, 12, 2.0f, Fade((Color) {255, 245, 235, 255}, 0.10f));
 
-		// recessed well the glass sinks into, with an inner shadow + top lip
-		Rectangle well = {dst.x - 14, dst.y - 14, dst.width + 28, dst.height + 28};
-		DrawRectangleRounded(well, 0.06f, 12, (Color) {7, 8, 8, 255});
-		DrawRectangleRoundedLinesEx(well, 0.06f, 12, 3.0f, Fade(BLACK, 0.65f));
-		DrawRectangleGradientV((int) well.x, (int) well.y, (int) well.width, 10,
-							   Fade((Color) {200, 220, 220, 255}, 0.10f), BLANK);
+			// recessed well the glass sinks into, with an inner shadow + top lip
+			Rectangle well = {dst.x - 14, dst.y - 14, dst.width + 28, dst.height + 28};
+			DrawRectangleRounded(well, 0.06f, 12, (Color) {7, 8, 8, 255});
+			DrawRectangleRoundedLinesEx(well, 0.06f, 12, 3.0f, Fade(BLACK, 0.65f));
+			DrawRectangleGradientV((int) well.x, (int) well.y, (int) well.width, 10,
+								   Fade((Color) {200, 220, 220, 255}, 0.10f), BLANK);
+		}
 
 		float flick = 0.93f + 0.07f * (float) GetRandomValue(0, 100) / 100.0f;
 		Rectangle src = {0, 0, (float) VIRT_W, (float) -VIRT_H};
@@ -1206,16 +1224,18 @@ static void UpdateDrawFrame(void) {
 		DrawTexturePro(virt.texture, src, dst, (Vector2) {0, 0}, 0, WHITE);
 		EndShaderMode();
 
-		// four corner screws sell the molded unit
-		for (int i = 0; i < 4; i++) {
-			Vector2 sc = {caseR.x + (i & 1 ? caseR.width - 16 : 16),
-						  caseR.y + (i & 2 ? caseR.height - 16 : 16)};
-			DrawCircleV(sc, 4, (Color) {24, 22, 20, 255});
-			DrawCircleV((Vector2) {sc.x - 1, sc.y - 1}, 2, (Color) {90, 86, 80, 255});
+		if (!compact) {
+			// four corner screws sell the molded unit
+			for (int i = 0; i < 4; i++) {
+				Vector2 sc = {caseR.x + (i & 1 ? caseR.width - 16 : 16),
+							  caseR.y + (i & 2 ? caseR.height - 16 : 16)};
+				DrawCircleV(sc, 4, (Color) {24, 22, 20, 255});
+				DrawCircleV((Vector2) {sc.x - 1, sc.y - 1}, 2, (Color) {90, 86, 80, 255});
+			}
 		}
 
 		// ---- on-screen keyboard: dark deck with sculpted beige keycaps ----
-		Rectangle deck = {(float) BEZEL, kbTopY, (float) (sw - BEZEL * 2), (float) (sh - BEZEL) - kbTopY};
+		Rectangle deck = {(float) margin, kbTopY, (float) (sw - margin * 2), (float) (sh - margin) - kbTopY};
 		DrawRectangleRounded(deck, 0.05f, 8, (Color) {52, 49, 44, 255});
 		DrawRectangleRoundedLinesEx(deck, 0.05f, 8, 2.0f, Fade(BLACK, 0.5f));
 		for (int i = 0; i < flatN; i++) {
@@ -1224,13 +1244,15 @@ static void UpdateDrawFrame(void) {
 			draw_key(keyRects[i], k, down);
 		}
 
-		// bezel furniture: label + power LED
-		DrawText("VFD-9000", sw - 96, sh - 20, 10, (Color) {120, 112, 100, 255});
-		DrawText("v" PROJECT_VERSION "  F11 fullscreen", 12, sh - 20, 10, (Color) {90, 84, 76, 255});
-		Color led = state == STATE_WIN ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
-		if ((state == STATE_BOOT || state == STATE_SPLASH) && fmodf(blink, 0.4f) < 0.2f)
-			led = (Color) {120, 60, 30, 255};
-		DrawCircle(sw / 2, sh - 14, 4, led);
+		if (!compact) {
+			// bezel furniture: label, version, power LED
+			DrawText("VFD-9000", sw - 96, sh - 20, 10, (Color) {120, 112, 100, 255});
+			DrawText("v" PROJECT_VERSION "  F11 fullscreen", 12, sh - 20, 10, (Color) {90, 84, 76, 255});
+			Color led = state == STATE_WIN ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
+			if ((state == STATE_BOOT || state == STATE_SPLASH) && fmodf(blink, 0.4f) < 0.2f)
+				led = (Color) {120, 60, 30, 255};
+			DrawCircle(sw / 2, sh - 14, 4, led);
+		}
 
 		EndDrawing();
 }
