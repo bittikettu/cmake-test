@@ -484,8 +484,9 @@ static void draw_mono(const char *s, int x, int y, Color c) {
 int main(void) {
 	const int winW = VIRT_W * SCALE + BEZEL * 2;
 	const int winH = VIRT_H * SCALE + BEZEL * 2;
-	SetConfigFlags(FLAG_VSYNC_HINT);
+	SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
 	InitWindow(winW, winH, "VFD-9000 TERMINAL");
+	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2);
 	SetTargetFPS(60);
 
 	RenderTexture2D virt = LoadRenderTexture(VIRT_W, VIRT_H);
@@ -506,6 +507,9 @@ int main(void) {
 	while (!WindowShouldClose()) {
 		float dt = GetFrameTime();
 		blink += dt;
+
+		bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+		if (IsKeyPressed(KEY_F11) || (altDown && IsKeyPressed(KEY_ENTER))) ToggleBorderlessWindowed();
 
 		//------------------------------------------------------------------ update
 		if (state == STATE_BOOT) {
@@ -540,7 +544,7 @@ int main(void) {
 				}
 				inputLen = (int) strlen(input);
 			}
-			if (IsKeyPressed(KEY_ENTER)) {
+			if (IsKeyPressed(KEY_ENTER) && !altDown) {
 				if (inputLen > 0) {
 					if (histCount == HIST_MAX) {
 						memmove(history[0], history[1], sizeof(history[0]) * (HIST_MAX - 1));
@@ -604,20 +608,28 @@ int main(void) {
 		EndTextureMode();
 
 		//------------------------------------------------------------------ compose to screen
+		// integer scale that fits the current window, display centered
+		int sw = GetScreenWidth(), sh = GetScreenHeight();
+		int scale = (sw - BEZEL * 2) / VIRT_W;
+		int scaleV = (sh - BEZEL * 2) / VIRT_H;
+		if (scaleV < scale) scale = scaleV;
+		if (scale < 1) scale = 1;
+		int dstX = (sw - VIRT_W * scale) / 2, dstY = (sh - VIRT_H * scale) / 2;
+		Rectangle dst = {(float) dstX, (float) dstY, (float) (VIRT_W * scale), (float) (VIRT_H * scale)};
+
 		BeginDrawing();
 		ClearBackground((Color) {26, 24, 22, 255});
 
 		// bezel
-		Rectangle bezelR = {4, 4, (float) winW - 8, (float) winH - 8};
+		Rectangle bezelR = {4, 4, (float) sw - 8, (float) sh - 8};
 		DrawRectangleRounded(bezelR, 0.06f, 8, (Color) {52, 48, 44, 255});
 		DrawRectangleRoundedLinesEx(bezelR, 0.06f, 8, 2.0f, (Color) {70, 66, 60, 255});
-		Rectangle screenR = {BEZEL - 6, BEZEL - 6, VIRT_W * SCALE + 12.0f, VIRT_H * SCALE + 12.0f};
+		Rectangle screenR = {dst.x - 6, dst.y - 6, dst.width + 12, dst.height + 12};
 		DrawRectangleRounded(screenR, 0.03f, 8, (Color) {8, 10, 10, 255});
 
 		// flicker + base pass + additive glow passes
 		float flick = 0.93f + 0.07f * (float) GetRandomValue(0, 100) / 100.0f;
 		Rectangle src = {0, 0, (float) VIRT_W, (float) -VIRT_H};
-		Rectangle dst = {BEZEL, BEZEL, (float) VIRT_W * SCALE, (float) VIRT_H * SCALE};
 		DrawTexturePro(virt.texture, src, dst, (Vector2) {0, 0}, 0, Fade(WHITE, flick));
 		BeginBlendMode(BLEND_ADDITIVE);
 		Rectangle glow1 = {dst.x - 2, dst.y - 2, dst.width + 4, dst.height + 4};
@@ -639,11 +651,11 @@ int main(void) {
 							   Fade(BLACK, 0.30f));
 
 		// bezel furniture: label + power LED
-		DrawText("VFD-9000", winW - 96, winH - 20, 10, (Color) {120, 112, 100, 255});
-		DrawText("v" PROJECT_VERSION, 12, winH - 20, 10, (Color) {90, 84, 76, 255});
+		DrawText("VFD-9000", sw - 96, sh - 20, 10, (Color) {120, 112, 100, 255});
+		DrawText("v" PROJECT_VERSION "  F11 fullscreen", 12, sh - 20, 10, (Color) {90, 84, 76, 255});
 		Color led = state == STATE_WIN ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
 		if (state == STATE_BOOT && fmodf(blink, 0.4f) < 0.2f) led = (Color) {120, 60, 30, 255};
-		DrawCircle(winW / 2, winH - 14, 4, led);
+		DrawCircle(sw / 2, sh - 14, 4, led);
 
 		EndDrawing();
 	}
