@@ -32,7 +32,7 @@
 #define INPUT_MAX 48
 #define HIST_MAX 16
 
-static const char *DOOR_CODE = "4731";
+static char doorCode[5] = "0000"; // rolled fresh on every boot
 
 //----------------------------------------------------------------------------
 // Terminal scrollback
@@ -128,14 +128,9 @@ static bool moduleLoaded = false;
 	"    vault.enc is base64. decode:  base64 -d vault.enc\n" \
 	"the rest you figure out from there.\n" \
 	"                                        - J"
-#define EASY_VAULT \
-	"RklSU1QgSEFMRiBPRiBUSEUgRE9PUiBDT0RFOiA0Nwp0aGUgc2Vjb25kIGhh\n" \
-	"bGYgaXMgaW4gcmlkZGxlLnR4dCwgYnV0IGkgcm90MTMnZCBpdC4KZGVjb2Rl\n" \
-	"OiAgcm90MTMgcmlkZGxlLnR4dAo="
-#define EASY_RIDDLE \
-	"FRPBAQ UNYS BS GUR QBBE PBQR: GUERR BAR\n" \
-	"vs gur xrlcnq juvarf nobhg n zvffvat qevire, ernq\n" \
-	"qbpf/qbbe_fpurzngvp.gkg"
+// vault.enc / riddle.txt are generated at login from the rolled door code
+static char vaultEnc[512];
+static char riddleEnc[512];
 #define EASY_SCHEMATIC \
 	"DOOR CONTROL - MODEL VFD-9000\n" \
 	"  +-------------------+\n" \
@@ -178,8 +173,8 @@ static FsNode fs[] = {
 	 "    tar -xf backup.tar"},
 	{"/home/guest/docs", true, false, false, false, NULL},
 	{"/home/guest/docs/memo.txt", false, false, false, false, EASY_MEMO},
-	{"/home/guest/docs/vault.enc", false, false, false, false, EASY_VAULT},
-	{"/home/guest/docs/riddle.txt", false, false, false, false, EASY_RIDDLE},
+	{"/home/guest/docs/vault.enc", false, false, false, false, vaultEnc},
+	{"/home/guest/docs/riddle.txt", false, false, false, false, riddleEnc},
 	{"/home/guest/docs/door_schematic.txt", false, false, false, false, EASY_SCHEMATIC},
 	{"/var", true, false, true, false, NULL},
 	{"/var/log", true, false, true, false, NULL},
@@ -307,6 +302,65 @@ static void set_content(const char *path, const char *content) {
 	if (n) n->content = content;
 }
 
+static void rot13_buf(const char *in, char *out, int outsz) {
+	int len = 0;
+	for (const char *p = in; *p && len < outsz - 1; p++) {
+		char c = *p;
+		if (c >= 'a' && c <= 'z') c = (char) ('a' + (c - 'a' + 13) % 26);
+		else if (c >= 'A' && c <= 'Z') c = (char) ('A' + (c - 'A' + 13) % 26);
+		out[len++] = c;
+	}
+	out[len] = '\0';
+}
+
+static void b64encode(const char *in, char *out, int outsz) {
+	static const char tab[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	int len = (int) strlen(in), o = 0, col = 0;
+	for (int i = 0; i < len && o < outsz - 6; i += 3) {
+		unsigned b = (unsigned) (unsigned char) in[i] << 16;
+		if (i + 1 < len) b |= (unsigned) (unsigned char) in[i + 1] << 8;
+		if (i + 2 < len) b |= (unsigned char) in[i + 2];
+		out[o++] = tab[(b >> 18) & 63];
+		out[o++] = tab[(b >> 12) & 63];
+		out[o++] = (i + 1 < len) ? tab[(b >> 6) & 63] : '=';
+		out[o++] = (i + 2 < len) ? tab[b & 63] : '=';
+		col += 4;
+		if (col >= 60 && i + 3 < len) {
+			out[o++] = '\n';
+			col = 0;
+		}
+	}
+	out[o] = '\0';
+}
+
+// Regenerate vault.enc and riddle.txt from the current door code. The second
+// half is spelled out in words so the digits don't survive rot13 readably.
+static void build_secret_files(void) {
+	static const char *WORD[10] = {"ZERO", "ONE", "TWO",   "THREE", "FOUR",
+								   "FIVE", "SIX", "SEVEN", "EIGHT", "NINE"};
+	char plain[256];
+	if (hardMode)
+		snprintf(plain, sizeof plain, "FIRST HALF OF THE DOOR CODE: %.2s\nthe rest is in riddle.txt\n", doorCode);
+	else
+		snprintf(plain, sizeof plain,
+				 "FIRST HALF OF THE DOOR CODE: %.2s\n"
+				 "the second half is in riddle.txt, but i rot13'd it.\n"
+				 "decode:  rot13 riddle.txt\n",
+				 doorCode);
+	b64encode(plain, vaultEnc, sizeof vaultEnc);
+
+	if (hardMode)
+		snprintf(plain, sizeof plain, "SECOND HALF OF THE DOOR CODE: %s %s", WORD[doorCode[2] - '0'],
+				 WORD[doorCode[3] - '0']);
+	else
+		snprintf(plain, sizeof plain,
+				 "SECOND HALF OF THE DOOR CODE: %s %s\n"
+				 "if the keypad whines about a missing driver, read\n"
+				 "docs/door_schematic.txt",
+				 WORD[doorCode[2] - '0'], WORD[doorCode[3] - '0']);
+	rot13_buf(plain, riddleEnc, sizeof riddleEnc);
+}
+
 static void apply_hard_mode(void) {
 	set_content("/home/guest/note.txt",
 				"The door needs the 4-digit code AND the bolt driver.\n"
@@ -319,10 +373,6 @@ static void apply_hard_mode(void) {
 				"the code halves are in the vault and the riddle.\n"
 				"you know what to do.\n"
 				"                                        - J");
-	set_content("/home/guest/docs/vault.enc",
-				"RklSU1QgSEFMRiBPRiBUSEUgRE9PUiBDT0RFOiA0Nwp0aGUgcmVzdCBpcyBp\n"
-				"biByaWRkbGUudHh0Cg==");
-	set_content("/home/guest/docs/riddle.txt", "FRPBAQ UNYS BS GUR QBBE PBQR: GUERR BAR");
 	set_content("/home/guest/docs/door_schematic.txt",
 				"DOOR CONTROL - MODEL VFD-9000\n"
 				"  +-------------------+\n"
@@ -353,8 +403,6 @@ static void apply_hard_mode(void) {
 static void apply_easy_mode(void) {
 	set_content("/home/guest/note.txt", EASY_NOTE);
 	set_content("/home/guest/docs/memo.txt", EASY_MEMO);
-	set_content("/home/guest/docs/vault.enc", EASY_VAULT);
-	set_content("/home/guest/docs/riddle.txt", EASY_RIDDLE);
 	set_content("/home/guest/docs/door_schematic.txt", EASY_SCHEMATIC);
 	set_content("/var/log/boot.log", EASY_BOOTLOG);
 	FsNode *hint = find_node_any("/home/guest/.hint");
@@ -369,6 +417,7 @@ static void do_login(const char *name) {
 		hardMode = (name[0] == 'l');
 		if (hardMode) apply_hard_mode();
 		else apply_easy_mode();
+		build_secret_files();
 		snprintf(username, sizeof username, "%s", name);
 		state = STATE_SHELL;
 		term_print("");
@@ -603,14 +652,7 @@ static void cmd_rot13(int argc, char **argv) {
 		return;
 	}
 	char out[1024];
-	int len = 0;
-	for (const char *p = n->content; *p && len < (int) sizeof out - 1; p++) {
-		char c = *p;
-		if (c >= 'a' && c <= 'z') c = (char) ('a' + (c - 'a' + 13) % 26);
-		else if (c >= 'A' && c <= 'Z') c = (char) ('A' + (c - 'A' + 13) % 26);
-		out[len++] = c;
-	}
-	out[len] = '\0';
+	rot13_buf(n->content, out, sizeof out);
 	term_print(out);
 }
 
@@ -644,13 +686,13 @@ static void cmd_unlock(int argc, char **argv) {
 		return;
 	}
 	term_print("doorctl: transmitting code to keypad ...");
-	if (strcmp(argv[1], DOOR_CODE) == 0 && !moduleLoaded) {
+	if (strcmp(argv[1], doorCode) == 0 && !moduleLoaded) {
 		term_print("doorctl: CODE ACCEPTED");
 		term_print("doorctl: ERROR: bolt servo not responding");
 		if (!hardMode) term_print("doorctl: bolt driver missing from kernel (lsmod?)");
 		return;
 	}
-	if (strcmp(argv[1], DOOR_CODE) == 0) {
+	if (strcmp(argv[1], doorCode) == 0) {
 		term_print("doorctl: CODE ACCEPTED");
 		term_print("doorctl_bolt: signal received");
 		term_print("doorctl: bolt retracting .........");
@@ -681,6 +723,8 @@ static void boot_start(void) {
 	moduleLoaded = false;
 	FsNode *log = find_node_any("/var/log/kern.log");
 	if (log) log->content = KERN_LOG_BASE;
+	// new door code every boot; 1000+ avoids leading-zero confusion
+	snprintf(doorCode, sizeof doorCode, "%d", GetRandomValue(1000, 9999));
 }
 
 static void run_command(char *cmdline) {
