@@ -253,6 +253,7 @@ static int bootIndex = 0;
 static int wrongTries = 0;
 static bool hardMode = false;
 static char username[16] = "guest";
+static double loginTime = 0; // escape timer starts at login
 
 typedef struct {
 	float t; // seconds since boot start when the line appears
@@ -419,6 +420,7 @@ static void do_login(const char *name) {
 		else apply_easy_mode();
 		build_secret_files();
 		snprintf(username, sizeof username, "%s", name);
+		loginTime = GetTime();
 		state = STATE_SHELL;
 		term_print("");
 		term_print("LAST LOGIN: 4119 DAYS AGO ON tty1");
@@ -704,6 +706,11 @@ static void cmd_unlock(int argc, char **argv) {
 		term_print("         ###  #   # #####  ###   #### #   # ##### #### ");
 		term_print("");
 		term_print("cold air. daylight. you are out.");
+		int t = (int) (GetTime() - loginTime);
+		if (t >= 3600)
+			term_printf("time to escape: %d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60);
+		else
+			term_printf("time to escape: %02d:%02d", t / 60, t % 60);
 		term_print("press ESC to power off the terminal.");
 		state = STATE_WIN;
 	} else {
@@ -763,7 +770,12 @@ static void run_command(char *cmdline) {
 		term_print(buf);
 	}
 	else if (strcmp(argv[0], "whoami") == 0) term_printf("%s (and you are staying that way)", username);
-	else if (strcmp(argv[0], "date") == 0) term_print("Fri Jun 13 03:14:07 1987  (clock battery dead)");
+	else if (strcmp(argv[0], "date") == 0) {
+		// clock battery is dead: time restarted at the 1987 default on login
+		int t = (int) (GetTime() - loginTime);
+		int s = 7 + t, m = 14 + s / 60, h = 3 + m / 60;
+		term_printf("Fri Jun 13 %02d:%02d:%02d 1987  (clock battery dead)", h % 24, m % 60, s % 60);
+	}
 	else if (strcmp(argv[0], "sudo") == 0)
 		term_print("guest is not in the sudoers file. this incident\nwill be reported. (to whom, exactly?)");
 	else if (strcmp(argv[0], "exit") == 0 || strcmp(argv[0], "logout") == 0)
