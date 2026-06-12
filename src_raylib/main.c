@@ -933,6 +933,15 @@ static void draw_key(Rectangle r, const Key *k, bool down) {
 	}
 }
 
+// Mechanical key-click samples; a random one plays on every key press.
+#define KEY_SFX_COUNT 18
+static Sound keySfx[KEY_SFX_COUNT];
+static int keySfxN; // how many actually loaded
+
+static void play_keysound(void) {
+	if (keySfxN > 0) PlaySound(keySfx[GetRandomValue(0, keySfxN - 1)]);
+}
+
 // One simulated frame: input, update, and the full compose-to-screen draw.
 static void UpdateDrawFrame(void) {
 		float dt = GetFrameTime();
@@ -1000,6 +1009,8 @@ static void UpdateDrawFrame(void) {
 		if (IsKeyPressed(KEY_ENTER) && !altDown) g_enter = true;
 		if (IsKeyPressed(KEY_UP)) g_up = true;
 		if (IsKeyPressed(KEY_DOWN)) g_down = true;
+		// a mechanical click on every physical key-down (its own queue, separate from chars)
+		while (GetKeyPressed() > 0) play_keysound();
 
 		// pointer over the on-screen keyboard (mouse, or touch mapped to mouse)
 		Vector2 mp = GetMousePosition();
@@ -1010,7 +1021,10 @@ static void UpdateDrawFrame(void) {
 				break;
 			}
 		g_kbDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
-		if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && g_kbHover >= 0) kb_activate(flatKey[g_kbHover]);
+		if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && g_kbHover >= 0) {
+			kb_activate(flatKey[g_kbHover]);
+			play_keysound();
+		}
 
 		//------------------------------------------------------------------ update
 		if (state == STATE_SPLASH) {
@@ -1280,6 +1294,22 @@ int main(void) {
 	bootMusic.looping = false;
 	if (bootMusic.frameCount > 0) PlayMusicStream(bootMusic);
 
+	// mechanical key-click bank (staged next to the exe / preloaded on web)
+	keySfxN = 0;
+	for (int i = 1; i <= KEY_SFX_COUNT; i++) {
+		char p[1024];
+#if defined(__EMSCRIPTEN__)
+		snprintf(p, sizeof p, "separated_keypresses/keypress_%d.mp3", i);
+#else
+		snprintf(p, sizeof p, "%sseparated_keypresses/keypress_%d.mp3", GetApplicationDirectory(), i);
+#endif
+		Sound s = LoadSound(p);
+		if (s.frameCount > 0) {
+			SetSoundVolume(s, 0.55f);
+			keySfx[keySfxN++] = s;
+		}
+	}
+
 	virt = LoadRenderTexture(VIRT_W, VIRT_H);
 	// bilinear so the non-integer upscale to fullscreen stays smooth; the CRT
 	// shader re-imposes scanlines on top, so the picture still reads as a tube
@@ -1300,6 +1330,7 @@ int main(void) {
 #else
 	while (!WindowShouldClose()) UpdateDrawFrame();
 
+	for (int i = 0; i < keySfxN; i++) UnloadSound(keySfx[i]);
 	if (bootMusic.frameCount > 0) UnloadMusicStream(bootMusic);
 	CloseAudioDevice();
 	UnloadShader(crt);

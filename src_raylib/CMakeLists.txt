@@ -57,13 +57,17 @@ if(EMSCRIPTEN)
     "-sALLOW_MEMORY_GROWTH=1"
     "-sASYNCIFY"
     "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3@boot.mp3"
+    "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses@separated_keypresses"
     "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
   set_target_properties(${APP_NAME} PROPERTIES LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3")
 else()
-  # Native: stage the boot chime next to the executable so it loads at runtime.
+  # Native: stage the boot chime and key-click samples next to the executable.
   add_custom_command(TARGET ${APP_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3"
-      "$<TARGET_FILE_DIR:${APP_NAME}>/boot.mp3")
+      "$<TARGET_FILE_DIR:${APP_NAME}>/boot.mp3"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/separated_keypresses")
 endif()
