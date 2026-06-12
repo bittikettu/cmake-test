@@ -1,4 +1,6 @@
 build
+build-web
+public
 .vscode
 .cache/
 .vs/*

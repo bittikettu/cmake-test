@@ -13,6 +13,10 @@
 
 #include "room.h"
 
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h> // browser-driven main loop for the web build
+#endif
+
 //----------------------------------------------------------------------------
 // Display geometry: everything is drawn into a small offscreen texture and
 // scaled up so the pixels stay chunky.
@@ -703,6 +707,53 @@ static void draw_center(const char *s, int y, Color c) {
 // CRT glass shader. The flat framebuffer is sampled through a barrel-distorted
 // UV so the picture bulges like real tube glass; scanlines, vignette, chroma
 // fringing and a corner glare ride along the curve to sell the 3D surface.
+// Desktop runs GLSL 330; the web (WebGL/GLES2) build needs the GLSL ES 100
+// variant below — same maths, just texture2D()/gl_FragColor and highp.
+#if defined(__EMSCRIPTEN__)
+static const char *CRT_FS =
+	"#version 100\n"
+	"precision highp float;\n" // mediump breaks the scanline phase maths
+	"varying vec2 fragTexCoord;\n"
+	"varying vec4 fragColor;\n"
+	"uniform sampler2D texture0;\n"
+	"uniform vec4 colDiffuse;\n"
+	"uniform vec2 uResolution;\n"
+	"uniform float uBright;\n"
+	"const float CURVE = 16.0;\n"
+	"const float SCAN = 0.30;\n"
+	"const float VIGN = 0.28;\n"
+	"const float CHROMA = 0.07;\n"
+	"vec2 curve(vec2 uv){\n"
+	"    uv = uv*2.0-1.0;\n"
+	"    vec2 off = abs(uv.yx)/CURVE;\n"
+	"    uv += uv*off*off;\n"
+	"    return uv*0.5+0.5;\n"
+	"}\n"
+	"void main(){\n"
+	"    vec2 uv = curve(fragTexCoord);\n"
+	"    vec2 e = smoothstep(vec2(0.0), vec2(0.006), uv)*smoothstep(vec2(0.0), vec2(0.006), 1.0-uv);\n"
+	"    float mask = e.x*e.y;\n"
+	"    vec2 d = uv-0.5;\n"
+	"    float ca = CHROMA*dot(d,d);\n"
+	"    vec3 col;\n"
+	"    col.r = texture2D(texture0, uv - d*ca).r;\n"
+	"    col.g = texture2D(texture0, uv).g;\n"
+	"    col.b = texture2D(texture0, uv + d*ca).b;\n"
+	"    vec2 px = 1.5/uResolution;\n"
+	"    vec3 glow = texture2D(texture0, uv+vec2(px.x,0.0)).rgb + texture2D(texture0, uv-vec2(px.x,0.0)).rgb\n"
+	"              + texture2D(texture0, uv+vec2(0.0,px.y)).rgb + texture2D(texture0, uv-vec2(0.0,px.y)).rgb;\n"
+	"    col += glow*0.06;\n"
+	"    float s = sin(uv.y*uResolution.y*3.14159);\n"
+	"    col *= 1.0 - SCAN*(0.5-0.5*s);\n"
+	"    float m = 0.5+0.5*sin(uv.x*uResolution.x*1.5708);\n"
+	"    col *= 1.0 - 0.05*(1.0-m);\n"
+	"    col *= clamp(1.0 - VIGN*dot(d,d)*3.0, 0.0, 1.0);\n"
+	"    vec2 g = uv-vec2(0.30,0.20);\n"
+	"    col += exp(-dot(g,g)*7.0)*0.05;\n"
+	"    col *= uBright*mask;\n"
+	"    gl_FragColor = vec4(col,1.0)*colDiffuse;\n"
+	"}\n";
+#else
 static const char *CRT_FS =
 	"#version 330\n"
 	"in vec2 fragTexCoord;\n"
@@ -746,49 +797,25 @@ static const char *CRT_FS =
 	"    col *= uBright*mask;\n"
 	"    finalColor = vec4(col,1.0)*colDiffuse;\n"
 	"}\n";
+#endif
 
-int main(void) {
-	const int winW = VIRT_W * SCALE + BEZEL * 2;
-	const int winH = VIRT_H * SCALE + BEZEL * 2;
-	SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
-	InitWindow(winW, winH, "VFD-9000 TERMINAL");
-	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2);
-	SetTargetFPS(60);
+// ---- frame-persistent state (file scope so the web per-frame callback can
+// reach it; the browser owns the loop and calls UpdateDrawFrame once a frame) ----
+static RenderTexture2D virt;
+static Shader crt;
+static int locRes, locBright;
+static Music bootMusic;
+static char input[INPUT_MAX + 1];
+static int inputLen;
+static char history[HIST_MAX][INPUT_MAX + 1];
+static int histCount, histPos = -1;
+static float blink;
+static const Color PHOSPHOR = {110, 255, 215, 255}; // VFD blue-green
+static const Color PHOS_DIM = {60, 160, 140, 255};
+static const Color SCREEN_BG = {3, 12, 12, 255};
 
-	// Boot chime. The mp3 is copied next to the executable by CMake, so we
-	// resolve it from the app directory rather than the working directory.
-	InitAudioDevice();
-	char bootPath[1024];
-	snprintf(bootPath, sizeof bootPath, "%sboot.mp3", GetApplicationDirectory());
-	Music bootMusic = LoadMusicStream(bootPath);
-	bootMusic.looping = false;
-	if (bootMusic.frameCount > 0) PlayMusicStream(bootMusic);
-
-	RenderTexture2D virt = LoadRenderTexture(VIRT_W, VIRT_H);
-	// bilinear so the non-integer upscale to fullscreen stays smooth; the CRT
-	// shader re-imposes scanlines on top, so the picture still reads as a tube
-	SetTextureFilter(virt.texture, TEXTURE_FILTER_BILINEAR);
-
-	termFont = LoadFontFromMemory(".ttf", VT323_Regular_ttf, (int) VT323_Regular_ttf_len, FONT_SZ, NULL, 0);
-	SetTextureFilter(termFont.texture, TEXTURE_FILTER_POINT);
-
-	Shader crt = LoadShaderFromMemory(0, CRT_FS);
-	int locRes = GetShaderLocation(crt, "uResolution");
-	int locBright = GetShaderLocation(crt, "uBright");
-
-	const Color PHOSPHOR = (Color) {110, 255, 215, 255}; // VFD blue-green
-	const Color PHOS_DIM = (Color) {60, 160, 140, 255};
-	const Color SCREEN_BG = (Color) {3, 12, 12, 255};
-
-	char input[INPUT_MAX + 1] = "";
-	int inputLen = 0;
-	char history[HIST_MAX][INPUT_MAX + 1];
-	int histCount = 0, histPos = -1;
-	float blink = 0;
-
-	boot_start();
-
-	while (!WindowShouldClose()) {
+// One simulated frame: input, update, and the full compose-to-screen draw.
+static void UpdateDrawFrame(void) {
 		float dt = GetFrameTime();
 		blink += dt;
 		if (bootMusic.frameCount > 0) UpdateMusicStream(bootMusic);
@@ -1034,7 +1061,49 @@ int main(void) {
 		DrawCircle(sw / 2, sh - 14, 4, led);
 
 		EndDrawing();
-	}
+}
+
+int main(void) {
+	const int winW = VIRT_W * SCALE + BEZEL * 2;
+	const int winH = VIRT_H * SCALE + BEZEL * 2;
+	SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
+	InitWindow(winW, winH, "VFD-9000 TERMINAL");
+	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2);
+#if !defined(__EMSCRIPTEN__)
+	SetTargetFPS(60); // on the web the browser's rAF drives the frame rate
+#endif
+
+	InitAudioDevice();
+#if defined(__EMSCRIPTEN__)
+	// emcc preloads boot.mp3 into MEMFS at the working-directory root
+	bootMusic = LoadMusicStream("boot.mp3");
+#else
+	// the mp3 is staged next to the executable by CMake; resolve from there
+	char bootPath[1024];
+	snprintf(bootPath, sizeof bootPath, "%sboot.mp3", GetApplicationDirectory());
+	bootMusic = LoadMusicStream(bootPath);
+#endif
+	bootMusic.looping = false;
+	if (bootMusic.frameCount > 0) PlayMusicStream(bootMusic);
+
+	virt = LoadRenderTexture(VIRT_W, VIRT_H);
+	// bilinear so the non-integer upscale to fullscreen stays smooth; the CRT
+	// shader re-imposes scanlines on top, so the picture still reads as a tube
+	SetTextureFilter(virt.texture, TEXTURE_FILTER_BILINEAR);
+
+	termFont = LoadFontFromMemory(".ttf", VT323_Regular_ttf, (int) VT323_Regular_ttf_len, FONT_SZ, NULL, 0);
+	SetTextureFilter(termFont.texture, TEXTURE_FILTER_POINT);
+
+	crt = LoadShaderFromMemory(0, CRT_FS);
+	locRes = GetShaderLocation(crt, "uResolution");
+	locBright = GetShaderLocation(crt, "uBright");
+
+	boot_start();
+
+#if defined(__EMSCRIPTEN__)
+	emscripten_set_main_loop(UpdateDrawFrame, 0, 1); // never returns
+#else
+	while (!WindowShouldClose()) UpdateDrawFrame();
 
 	if (bootMusic.frameCount > 0) UnloadMusicStream(bootMusic);
 	CloseAudioDevice();
@@ -1042,5 +1111,6 @@ int main(void) {
 	UnloadFont(termFont);
 	UnloadRenderTexture(virt);
 	CloseWindow();
+#endif
 	return 0;
 }

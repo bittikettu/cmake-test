@@ -1,7 +1,9 @@
 {
     "build": {
         // Path is relative to the devcontainer.json file.
-        "dockerfile": "../Dockerfile"
+        "dockerfile": "../Dockerfile",
+        // Native dev toolchain stage (the Dockerfile's default target is the web build).
+        "target": "cmakedev"
     },
     "customizations": {
         "vscode": {

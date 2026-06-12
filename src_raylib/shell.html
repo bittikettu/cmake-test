@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>VFD-9000 — terminal escape room</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0a0a0a; overflow: hidden; }
+    body { display: flex; align-items: center; justify-content: center; }
+    canvas { background: #000; display: block; outline: none; }
+    #note {
+      position: fixed; left: 0; right: 0; bottom: 8px; text-align: center;
+      color: #4a6b62; font: 12px ui-monospace, monospace; opacity: .7;
+      pointer-events: none; letter-spacing: .04em;
+    }
+    #note.hide { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <div id="note">click the screen to enable sound &middot; F11 fullscreen</div>
+  <script>
+    // Browsers block audio until a user gesture; hide the hint after first click.
+    addEventListener('pointerdown', function () {
+      var n = document.getElementById('note');
+      if (n) n.classList.add('hide');
+    }, { once: true });
+
+    var Module = {
+      canvas: document.getElementById('canvas'),
+      print: function (t) { console.log(t); },
+      printErr: function (t) { console.error(t); },
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

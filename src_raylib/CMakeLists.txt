@@ -31,6 +31,11 @@ set(JANSSON_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(JANSSON_WITHOUT_TESTS ON CACHE BOOL "" FORCE)
 set(JANSSON_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+# Build raylib for the browser (WebGL/GLES2) when configured via emcmake.
+if(EMSCRIPTEN)
+  set(PLATFORM Web CACHE STRING "raylib platform" FORCE)
+endif()
+
 FetchContent_MakeAvailable(raylib)
 
 #set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
@@ -42,8 +47,23 @@ add_executable(${APP_NAME} ${SRC_FILES})
 
 target_link_libraries(${APP_NAME} PRIVATE raylib)
 
-# Stage the boot chime next to the executable so it loads at runtime.
-add_custom_command(TARGET ${APP_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3"
-    "$<TARGET_FILE_DIR:${APP_NAME}>/boot.mp3")
+if(EMSCRIPTEN)
+  # Emit index.html/.js/.wasm/.data so GitHub Pages can serve it directly.
+  # boot.mp3 is packed into the .data bundle via --preload-file, and the
+  # default shell is replaced with our minimal full-screen canvas page.
+  set_target_properties(${APP_NAME} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
+  target_link_options(${APP_NAME} PRIVATE
+    "-sUSE_GLFW=3"
+    "-sALLOW_MEMORY_GROWTH=1"
+    "-sASYNCIFY"
+    "--preload-file" "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3@boot.mp3"
+    "--shell-file" "${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
+  set_target_properties(${APP_NAME} PROPERTIES LINK_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3")
+else()
+  # Native: stage the boot chime next to the executable so it loads at runtime.
+  add_custom_command(TARGET ${APP_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/boot.mp3")
+endif()

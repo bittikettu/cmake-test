@@ -1,0 +1,9 @@
+# Keep the build context small: never ship local build trees (which include the
+# whole fetched raylib checkout) or install output into the image.
+build
+build-web
+public
+install
+.cache
+.vs
+.vscode
