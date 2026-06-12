@@ -93,16 +93,33 @@ typedef struct {
 	const char *content;
 } FsNode;
 
+// kern.log grows two lines when the bolt module gets loaded
+#define KERN_LOG_BASE \
+	"[    0.00 ] vfd-kernel 0.9 booting\n" \
+	"[    0.02 ] cpu0: 8MHz detected\n" \
+	"[    0.05 ] tty1: console ready\n" \
+	"[    0.09 ] kbd80: keyboard matrix mapped\n" \
+	"[    0.14 ] vfd_core: display driver loaded, 64x20 cells\n" \
+	"[    0.22 ] doorctl: keypad controller found on tty2\n" \
+	"[    0.23 ] doorctl: WARNING bolt driver not loaded\n" \
+	"[    0.31 ] cron: daemon started"
+static const char *KERN_LOG_LOADED = KERN_LOG_BASE
+	"\n[  142.77 ] doorctl_bolt: module inserted"
+	"\n[  142.79 ] doorctl_bolt: bolt servo armed, awaiting code";
+static bool moduleLoaded = false;
+
 static FsNode fs[] = {
 	{"/", true, false, true, false, NULL},
 	{"/home", true, false, true, false, NULL},
 	{"/home/guest", true, false, true, false, NULL},
 	{"/home/guest/note.txt", false, false, true, false,
-	 "The door locked itself again. The keypad on it takes:\n"
+	 "The door locked itself again, and management installed a\n"
+	 "'security upgrade': the keypad now needs the 4-digit code\n"
 	 "    unlock <4 digits>\n"
-	 "I split the code in two so 'nobody' would find it.\n"
-	 "Half is in my backup archive, half is somewhere in the\n"
-	 "system logs. If you forget how this shell works: help\n"
+	 "AND the bolt driver loaded in the kernel. Wonderful.\n"
+	 "\n"
+	 "I keep the code encrypted in my backup archive.\n"
+	 "If you forget how this shell works: help\n"
 	 "\n"
 	 "P.S. some files like to hide.  ls -a\n"
 	 "                                        - J"},
@@ -117,20 +134,29 @@ static FsNode fs[] = {
 	{"/home/guest/docs/memo.txt", false, false, false, false,
 	 "MEMO (do not tape the code to the door this time)\n"
 	 "\n"
-	 "first half of the door code: 47\n"
-	 "second half: i logged it during boot, like an idiot.\n"
-	 "search the log instead of reading all of it:\n"
-	 "    grep KEYPART /var/log/boot.log\n"
+	 "i 'encrypted' the code halves. military grade:\n"
+	 "    vault.enc is base64. decode:  base64 -d vault.enc\n"
+	 "the rest you figure out from there.\n"
 	 "                                        - J"},
+	{"/home/guest/docs/vault.enc", false, false, false, false,
+	 "RklSU1QgSEFMRiBPRiBUSEUgRE9PUiBDT0RFOiA0Nwp0aGUgc2Vjb25kIGhh\n"
+	 "bGYgaXMgaW4gcmlkZGxlLnR4dCwgYnV0IGkgcm90MTMnZCBpdC4KZGVjb2Rl\n"
+	 "OiAgcm90MTMgcmlkZGxlLnR4dAo="},
+	{"/home/guest/docs/riddle.txt", false, false, false, false,
+	 "FRPBAQ UNYS BS GUR QBBE PBQR: GUERR BAR\n"
+	 "vs gur xrlcnq juvarf nobhg n zvffvat qevire, ernq\n"
+	 "qbpf/qbbe_fpurzngvp.gkg"},
 	{"/home/guest/docs/door_schematic.txt", false, false, false, false,
 	 "DOOR CONTROL - MODEL VFD-9000\n"
 	 "  +-------------------+\n"
 	 "  |  [#] [#] [#] [#]  |\n"
 	 "  |   KEYPAD 4-DIGIT  |\n"
-	 "  |                   |\n"
-	 "  |   unlock <code>   |\n"
 	 "  +-------------------+\n"
-	 "wiring: keypad -> doorctl (tty2) -> bolt"},
+	 "wiring: keypad -> doorctl (tty2) -> bolt servo\n"
+	 "bolt driver:  /lib/modules/doorctl_bolt.ko\n"
+	 "load it:      modprobe doorctl_bolt\n"
+	 "verify:       dmesg  (or grep doorctl /var/log/kern.log)\n"
+	 "the bolt will NOT move unless the driver is loaded."},
 	{"/var", true, false, true, false, NULL},
 	{"/var/log", true, false, true, false, NULL},
 	{"/var/log/boot.log", false, false, true, false,
@@ -143,13 +169,18 @@ static FsNode fs[] = {
 	 "[ 0.402 ] tty1: console attached\n"
 	 "[ 0.498 ] doorctl: keypad online at tty2\n"
 	 "[ 0.511 ] doorctl: bolt engaged, autolock=ON\n"
-	 "[ 0.523 ] doorctl: operator note follows\n"
-	 "[ 0.524 ] doorctl: KEYPART-2 = 31 (pair with archive half)\n"
+	 "[ 0.524 ] doorctl: bolt driver not loaded (see kern.log)\n"
 	 "[ 0.610 ] cron: janitor.sh scheduled 03:00\n"
 	 "[ 0.700 ] lpd: printer out of paper since 1986\n"
 	 "[ 0.802 ] login: guest auto-login enabled\n"
 	 "[ 0.900 ] syslogd: ready\n"
 	 "[ 0.951 ] motd: updated by management"},
+	{"/var/log/kern.log", false, false, true, false, KERN_LOG_BASE},
+	{"/lib", true, false, true, false, NULL},
+	{"/lib/modules", true, false, true, false, NULL},
+	{"/lib/modules/doorctl_bolt.ko", false, false, true, false,
+	 "ELF 8-bit LSB relocatable, vfd-kernel module 'doorctl_bolt'\n"
+	 "(this is for the kernel, not for cat. try modprobe.)"},
 	{"/etc", true, false, true, false, NULL},
 	{"/etc/motd", false, false, true, false,
 	 "PROPERTY OF KOIVU & SONS COLD STORAGE.\n"
@@ -257,6 +288,10 @@ static void cmd_help(void) {
 	term_print("  cat FILE        print a file");
 	term_print("  grep PAT FILE   print lines of FILE containing PAT");
 	term_print("  tar -xf FILE    extract an archive");
+	term_print("  base64 -d FILE  decode 'military grade' encryption");
+	term_print("  rot13 FILE      rotate letters by 13");
+	term_print("  modprobe NAME   load a kernel module");
+	term_print("  dmesg           kernel messages      lsmod loaded modules");
 	term_print("  unlock CODE     try a code on the door keypad");
 	term_print("  clear           clear screen         exit  good luck");
 }
@@ -403,14 +438,110 @@ static void cmd_tar(int argc, char **argv) {
 	if (!any) term_print("tar: nothing to do (already extracted)");
 }
 
+static int b64val(int c) {
+	if (c >= 'A' && c <= 'Z') return c - 'A';
+	if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+	if (c >= '0' && c <= '9') return c - '0' + 52;
+	if (c == '+') return 62;
+	if (c == '/') return 63;
+	return -1;
+}
+
+static void cmd_base64(int argc, char **argv) {
+	if (argc < 3 || strcmp(argv[1], "-d") != 0) {
+		term_print("usage: base64 -d FILE   (decode)");
+		return;
+	}
+	char path[256];
+	resolve_path(argv[2], path, sizeof path);
+	FsNode *n = find_node(path);
+	if (!n || n->isDir || !n->content) {
+		term_printf("base64: %s: cannot read", argv[2]);
+		return;
+	}
+	char out[1024];
+	int bits = 0, acc = 0, len = 0;
+	for (const char *p = n->content; *p && len < (int) sizeof out - 1; p++) {
+		int v = b64val(*p);
+		if (v < 0) continue; // skip whitespace, padding, junk
+		acc = (acc << 6) | v;
+		bits += 6;
+		if (bits >= 8) {
+			bits -= 8;
+			out[len++] = (char) ((acc >> bits) & 0xFF);
+		}
+	}
+	out[len] = '\0';
+	if (len == 0) {
+		term_printf("base64: %s: invalid input", argv[2]);
+		return;
+	}
+	term_print(out);
+}
+
+static void cmd_rot13(int argc, char **argv) {
+	if (argc < 2) {
+		term_print("usage: rot13 FILE");
+		return;
+	}
+	char path[256];
+	resolve_path(argv[1], path, sizeof path);
+	FsNode *n = find_node(path);
+	if (!n || n->isDir || !n->content) {
+		term_printf("rot13: %s: cannot read", argv[1]);
+		return;
+	}
+	char out[1024];
+	int len = 0;
+	for (const char *p = n->content; *p && len < (int) sizeof out - 1; p++) {
+		char c = *p;
+		if (c >= 'a' && c <= 'z') c = (char) ('a' + (c - 'a' + 13) % 26);
+		else if (c >= 'A' && c <= 'Z') c = (char) ('A' + (c - 'A' + 13) % 26);
+		out[len++] = c;
+	}
+	out[len] = '\0';
+	term_print(out);
+}
+
+static void cmd_modprobe(int argc, char **argv) {
+	if (argc < 2) {
+		term_print("usage: modprobe MODULE");
+		return;
+	}
+	if (strcmp(argv[1], "doorctl_bolt") == 0 || strcmp(argv[1], "doorctl_bolt.ko") == 0) {
+		if (!moduleLoaded) {
+			moduleLoaded = true;
+			FsNode *log = find_node("/var/log/kern.log");
+			if (log) log->content = KERN_LOG_LOADED;
+		}
+		// like the real thing: silence. check the log to be sure.
+	} else {
+		term_printf("modprobe: FATAL: Module %s not found in directory /lib/modules", argv[1]);
+	}
+}
+
+static void cmd_lsmod(void) {
+	term_print("Module          Size  Used by");
+	term_print("vfd_core       12288  1");
+	term_print("kbd80           4096  0");
+	if (moduleLoaded) term_print("doorctl_bolt    8192  0");
+}
+
 static void cmd_unlock(int argc, char **argv) {
 	if (argc < 2) {
 		term_print("usage: unlock <4-digit code>");
 		return;
 	}
 	term_print("doorctl: transmitting code to keypad ...");
+	if (strcmp(argv[1], DOOR_CODE) == 0 && !moduleLoaded) {
+		term_print("doorctl: CODE ACCEPTED");
+		term_print("doorctl: ERROR: bolt servo not responding");
+		term_print("doorctl: bolt driver missing from kernel (lsmod?)");
+		return;
+	}
 	if (strcmp(argv[1], DOOR_CODE) == 0) {
 		term_print("doorctl: CODE ACCEPTED");
+		term_print("doorctl_bolt: signal received");
 		term_print("doorctl: bolt retracting .........");
 		term_print("");
 		term_print("        #   # #   # #      ###   #### #   # ##### #### ");
@@ -455,6 +586,14 @@ static void run_command(char *cmdline) {
 	else if (strcmp(argv[0], "cat") == 0) cmd_cat(argc, argv);
 	else if (strcmp(argv[0], "grep") == 0) cmd_grep(argc, argv);
 	else if (strcmp(argv[0], "tar") == 0) cmd_tar(argc, argv);
+	else if (strcmp(argv[0], "base64") == 0) cmd_base64(argc, argv);
+	else if (strcmp(argv[0], "rot13") == 0) cmd_rot13(argc, argv);
+	else if (strcmp(argv[0], "modprobe") == 0) cmd_modprobe(argc, argv);
+	else if (strcmp(argv[0], "lsmod") == 0) cmd_lsmod();
+	else if (strcmp(argv[0], "dmesg") == 0) {
+		FsNode *log = find_node("/var/log/kern.log");
+		if (log && log->content) term_print(log->content);
+	}
 	else if (strcmp(argv[0], "unlock") == 0) cmd_unlock(argc, argv);
 	else if (strcmp(argv[0], "clear") == 0) { lineCount = 0; scrollOff = 0; }
 	else if (strcmp(argv[0], "echo") == 0) {
