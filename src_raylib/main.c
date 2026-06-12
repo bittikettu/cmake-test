@@ -41,10 +41,19 @@ static char termLines[MAX_LINES][COLS + 1];
 static int lineCount = 0;
 static int scrollOff = 0; // 0 = stuck to bottom
 
+// Teletype effect: output is revealed character by character, like a slow
+// serial line. Everything before (revealLine, revealCol) is visible.
+#define REVEAL_CPS 240 // ~2400 baud
+static int revealLine = 0;
+static int revealCol = 0;
+static float revealAcc = 0;
+
 static void term_putline(const char *s) {
 	if (lineCount == MAX_LINES) {
 		memmove(termLines[0], termLines[1], sizeof(termLines[0]) * (MAX_LINES - 1));
 		lineCount--;
+		if (revealLine > 0) revealLine--;
+		else revealCol = 0;
 	}
 	snprintf(termLines[lineCount], COLS + 1, "%s", s);
 	lineCount++;
@@ -726,6 +735,9 @@ static void boot_start(void) {
 	bootIndex = 0;
 	lineCount = 0;
 	scrollOff = 0;
+	revealLine = 0;
+	revealCol = 0;
+	revealAcc = 0;
 	// a reboot drops loaded modules; extracted files survive on "disk"
 	moduleLoaded = false;
 	FsNode *log = find_node_any("/var/log/kern.log");
@@ -761,7 +773,7 @@ static void run_command(char *cmdline) {
 		if (log && log->content) term_print(log->content);
 	}
 	else if (strcmp(argv[0], "unlock") == 0) cmd_unlock(argc, argv);
-	else if (strcmp(argv[0], "clear") == 0) { lineCount = 0; scrollOff = 0; }
+	else if (strcmp(argv[0], "clear") == 0) { lineCount = 0; scrollOff = 0; revealLine = 0; revealCol = 0; }
 	else if (strcmp(argv[0], "echo") == 0) {
 		char buf[COLS + 1] = "";
 		int len = 0;
@@ -888,8 +900,22 @@ int main(void) {
 			}
 		}
 
+		// teletype reveal: the "serial line" delivers only so many chars/sec
+		if (revealLine < lineCount) {
+			revealAcc += dt * REVEAL_CPS;
+			while (revealAcc >= 1.0f && revealLine < lineCount) {
+				revealAcc -= 1.0f;
+				if (revealCol < (int) strlen(termLines[revealLine])) revealCol++;
+				else { revealLine++; revealCol = 0; } // the newline costs a char too
+			}
+		} else {
+			revealAcc = 0;
+		}
+		bool printing = revealLine < lineCount;
+		int shown = printing ? revealLine + 1 : lineCount;
+
 		// scrollback with mouse wheel / page keys
-		int maxScroll = lineCount > VISROWS ? lineCount - VISROWS : 0;
+		int maxScroll = shown > VISROWS ? shown - VISROWS : 0;
 		scrollOff += (int) (GetMouseWheelMove() * 3.0f);
 		if (IsKeyPressed(KEY_PAGE_UP)) scrollOff += VISROWS / 2;
 		if (IsKeyPressed(KEY_PAGE_DOWN)) scrollOff -= VISROWS / 2;
@@ -900,30 +926,39 @@ int main(void) {
 		BeginTextureMode(virt);
 		ClearBackground(SCREEN_BG);
 
-		int first = lineCount - VISROWS - scrollOff;
+		int first = shown - VISROWS - scrollOff;
 		if (first < 0) first = 0;
 		int y = PAD_Y;
-		for (int i = first; i < lineCount - scrollOff && i < lineCount; i++) {
+		for (int i = first; i < shown - scrollOff; i++) {
 			// older rows fade a little, like phosphor cooling off
 			float age = (float) (i - first) / (float) VISROWS;
 			Color c = (Color) {
 				(unsigned char) (PHOS_DIM.r + (PHOSPHOR.r - PHOS_DIM.r) * (0.55f + 0.45f * age)),
 				(unsigned char) (PHOS_DIM.g + (PHOSPHOR.g - PHOS_DIM.g) * (0.55f + 0.45f * age)),
 				(unsigned char) (PHOS_DIM.b + (PHOSPHOR.b - PHOS_DIM.b) * (0.55f + 0.45f * age)), 255};
-			draw_mono(termLines[i], PAD_X, y, c);
+			if (i == revealLine && printing) {
+				char part[COLS + 1];
+				memcpy(part, termLines[i], (size_t) revealCol);
+				part[revealCol] = '\0';
+				draw_mono(part, PAD_X, y, c);
+				// print head chasing the incoming characters
+				DrawRectangle(PAD_X + revealCol * CELL_W, y + 1, CELL_W - 1, CELL_H - 2, PHOS_DIM);
+			} else {
+				draw_mono(termLines[i], PAD_X, y, c);
+			}
 			y += CELL_H;
 		}
 
 		// input line
 		int inputY = PAD_Y + VISROWS * CELL_H;
-		if ((state == STATE_SHELL || state == STATE_LOGIN) && scrollOff == 0) {
+		if ((state == STATE_SHELL || state == STATE_LOGIN) && scrollOff == 0 && !printing) {
 			char prompt[64], lineBuf[COLS + 1];
 			prompt_str(prompt, sizeof prompt);
 			snprintf(lineBuf, sizeof lineBuf, "%s%s", prompt, input);
 			draw_mono(lineBuf, PAD_X, inputY, PHOSPHOR);
 			if (fmodf(blink, 1.0f) < 0.55f)
 				DrawRectangle(PAD_X + (int) strlen(lineBuf) * CELL_W, inputY + 1, CELL_W - 1, CELL_H - 2, PHOSPHOR);
-		} else if (state == STATE_BOOT) {
+		} else if (state == STATE_BOOT && !printing) {
 			if (fmodf(blink, 0.6f) < 0.35f) DrawRectangle(PAD_X, inputY + 1, CELL_W - 1, CELL_H - 2, PHOSPHOR);
 		} else if (scrollOff > 0) {
 			draw_mono("-- scroll: wheel / pgup / pgdn --", PAD_X, inputY, PHOS_DIM);
