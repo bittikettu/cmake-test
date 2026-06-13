@@ -6,9 +6,10 @@
 --   1. tar -xf /tmp/coldstore_db.tar      -- unpack the dumped database file
 --   2. mv /tmp/coldstore.db /var/lib/pgsql/   -- into the server's data dir
 --   3. service coldstore-db start         -- bring the server up
---   4. sql SELECT * FROM sales            -- read the ledger
---   5. every item has a 13-digit barcode except one 4-digit "override"; that
---      4-digit barcode is the door code:  unlock <code>
+--   4. sql: the table name is NOT given -- 'sql \?' for help, '\dt' lists the
+--      tables (with decoys), and the player must pick the one holding sales
+--   5. one record there is an impostor; the last 4 digits of its (otherwise
+--      ordinary-looking 13-digit) barcode are the door code:  unlock <code>
 --
 -- See rooms/coldstore.lua for the authoring conventions (64 cols, ASCII,
 -- diegetic voice, n00b names commands / l33t strips the hints).
@@ -22,17 +23,18 @@ A 'helpful' backup script tarred the live db and left it in
 archive (tar), move the db file where the server expects it
 (mv), then bring the server up (service ... start).
 
-Once it's running, query the ledger with sql. Every real
-product has a proper barcode; the door override does not.
+Once it's running, talk to it with sql. I never wrote down
+which table the ledger is in -- 'sql \?' shows how to list
+the tables. Pick the one that records what was SOLD; the door
+code is the last four digits of the odd record's barcode.
 unlock it.
                                         - J]]
 
 local HARD_NOTE = [[
-The release code is filed in the sales database. It is down.
+The release code is filed in the database. It is down.
 A botched backup left it as a tarball in the wrong directory.
 Get the data file where the server wants it, bring the server
-up, and read the ledger. The override does not look like the
-other records.
+up, then find the right table.
                                         - J]]
 
 local MOTD = [[
@@ -66,7 +68,7 @@ INVENTORY DB ....... OFFLINE  (release code is inside it)]],
 		{path = "/", dir = true},
 		{path = "/home", dir = true},
 		{path = "/home/guest", dir = true},
-		{path = "/home/guest/note.txt", content = EASY_NOTE},
+		{path = "/home/guest/note.txt", content = HARD_NOTE},
 		{path = "/tmp", dir = true},
 		-- the database, dumped as a tarball in the WRONG directory (/tmp)
 		{path = "/tmp/coldstore_db.tar", archive = true,
@@ -84,8 +86,8 @@ INVENTORY DB ....... OFFLINE  (release code is inside it)]],
 		-- where the db must end up (revealed by `mv`); start hidden+absent
 		{path = "/var/lib/pgsql/coldstore.db", present = false,
 		 content = "PGDMP\\x00 coldstore inventory db -- binary table heap."},
-		-- the queryable ledger: never 'present' and hidden, so only `sql` sees
-		-- it. Its content is (re)written by build_secrets with the live code.
+		-- the queryable catalog (sales ledger + decoy tables): never 'present'
+		-- and hidden, so only `sql` sees it. Rewritten by build_secrets.
 		{path = "/var/lib/coldstore.records", present = false, hidden = true},
 		{path = "/etc", dir = true},
 		{path = "/etc/motd", content = MOTD},
@@ -114,29 +116,70 @@ INVENTORY DB ....... OFFLINE  (release code is inside it)]],
 	codeMissingMsg = "doorctl: override rejected -- inventory system offline",
 	codeMissingHint = "bring the database server up first (service ... start)",
 
-	-- Build the sales ledger from the freshly-rolled code: a column of ordinary
-	-- dairy items with 13-digit EAN barcodes, plus one rogue "override" record
-	-- whose 4-digit barcode IS the door code.
+	-- Build the table catalog from the freshly-rolled code. The sales ledger is
+	-- the one that matters -- one of its records is an impostor whose 13-digit
+	-- barcode ends in the door code (so it blends in by length). The other
+	-- tables are plausible decoys; the player must find the right one via \dt.
+	-- Catalog format the `sql` tool parses: each table is a header line
+	-- ":: name | description" followed by its body (column header, rule, rows).
 	build_secrets = function(code, hard)
 		local function row(sku, item, bc, qty)
 			return string.format("%-8s %-16s %-13s %4s", sku, item, bc, qty)
 		end
-		local t = {
+		local sales = {
 			row("SKU", "ITEM", "EAN-13", "QTY"),
 			string.rep("-", 46),
 			row("DRY-1001", "whole milk 1L", "7350011110017", "412"),
 			row("DRY-1002", "semi milk 1L", "7350011110024", "377"),
 			row("DRY-1003", "butter 500g", "7350011110031", "118"),
 			row("DRY-1004", "sour cream 2dl", "7350011110048", "205"),
-			row("DRY-1005", "emmental 1kg", "7350011110055", "64"),
-			row("DRY-1006", "yoghurt 1kg", "7350011110062", "151"),
-			row("DRY-1007", "quark 250g", "7350011110079", "98"),
-			row("OVR-0000", "<<no label>>", code, "1"),
+			row("ORY-1005", "blue cheese 200g", "735001111" .. code, "69"),
+			row("DRY-1006", "emmental 1kg", "7350011110055", "64"),
+			row("DRY-1007", "yoghurt 1kg", "7350011110062", "151"),
+			row("DRY-1008", "quark 250g", "7350011110079", "98"),
 		}
-		vfd.set_content("/var/lib/coldstore.records", table.concat(t, "\n"))
+		-- decoy tables: plausible, but none carry the door code
+		local temps = {
+			"HOUR   SENSOR  DEG_C",
+			"-----  ------  -----",
+			"02:00  FRZ-A   -24.1",
+			"03:00  FRZ-A   -23.9",
+			"04:00  FRZ-B   -19.7",
+		}
+		local staff = {
+			"ID    NAME             SHIFT",
+			"----  ---------------  -----",
+			"E-01  aino koivu       06-14",
+			"E-02  veikko salonen   14-22",
+			"E-03  liisa romppanen  22-06",
+		}
+		local stock = {
+			"SKU       ON_HAND  AISLE",
+			"--------  -------  -----",
+			"DRY-1001  412      A-2",
+			"DRY-1003  118      A-2",
+			"DRY-1005   64      A-4",
+		}
+		local vendors = {
+			"CODE  SUPPLIER          PHONE",
+			"----  ----------------  -----------",
+			"V-11  maitola oy        02-555-0110",
+			"V-20  juustomestari oy  02-555-0144",
+		}
+		local function block(out, name, desc, body)
+			out[#out + 1] = ":: " .. name .. " | " .. desc
+			for _, l in ipairs(body) do out[#out + 1] = l end
+		end
+		local cat = {}
+		block(cat, "temps", "freezer temperature log (hourly)", temps)
+		block(cat, "staff", "employee roster and shift rota", staff)
+		block(cat, "stock", "current stock on hand per SKU", stock)
+		block(cat, "sales", "completed sales: items sold to buyers", sales)
+		block(cat, "vendors", "delivery suppliers and phone numbers", vendors)
+		vfd.set_content("/var/lib/coldstore.records", table.concat(cat, "\n"))
 	end,
 
 	apply_difficulty = function(hard)
-		vfd.set_content("/home/guest/note.txt", hard and HARD_NOTE or EASY_NOTE)
+		vfd.set_content("/home/guest/note.txt", hard and HARD_NOTE or HARD_NOTE)
 	end,
 }

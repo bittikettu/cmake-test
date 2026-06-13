@@ -138,10 +138,14 @@ not code**:
   generic `mv` verb — the only writable operation on the otherwise read-only
   fs; it hides `mvSrc` and reveals `mvDst`) and a **database** the generic
   `sql` verb reads (`dbName` + `dbPath`, a hidden never-`present` node whose
-  content is the table dump; `SELECT` with an optional substring `WHERE`).
+  content is a *catalog* of tables — each block is `:: name | description`
+  then its rows). `sql` offers `\?` (help), `\dt` (list tables + descriptions),
+  and `SELECT * FROM <table>` with an optional substring `WHERE`; the right
+  table name is never advertised, so decoy tables make finding it a step.
   Cold Vault chains all three: untar the db, `mv` it into the data dir,
-  `service coldstore-db start`, then `sql SELECT * FROM sales` to read a code
-  filed as a rogue barcode. `rooms/coldvault.lua` is the worked example.
+  `service coldstore-db start`, then discover the sales table via `\dt` and
+  query it for a code hidden in a rogue record's barcode.
+  `rooms/coldvault.lua` is the worked example.
 - The two per-room hooks are the ~10% that can't be plain data, written as Lua
   **functions** in the room table: `build_secrets(code, hard)` regenerates the
   encrypted clue files from the freshly-rolled door code (calling

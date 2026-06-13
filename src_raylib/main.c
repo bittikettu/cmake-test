@@ -180,7 +180,7 @@ static const Builtin g_builtins[] = {
 	{"lsmod", "list loaded modules"},
 	{"dmesg", "print kernel messages"},
 	{"service", "control a daemon: service NAME start|status"},
-	{"sql", "query the database: sql SELECT ..."},
+	{"sql", "query the database (sql \\? for help)"},
 	{"unlock", "try a code on the door: unlock CODE"},
 	{"clear", "clear the screen"},
 	{"exit", "give up (the door stays locked)"},
@@ -282,24 +282,34 @@ static bool hardMode = false;
 static char username[16] = "guest";
 static double loginTime = 0; // escape timer starts at login
 
+// A boot self-test line. A "worker" line drops its label, then ticks dots out
+// one at a time (so it looks like it's grinding through real work) before " OK"
+// lands; plain lines just appear. Generic self-test, shared by every cartridge.
 typedef struct {
-	float t; // seconds since boot start when the line appears
-	const char *s;
+	const char *label; // worker: text before the dots; plain: the whole line
+	bool worker;	   // true => animate dots, then " OK"
 } BootLine;
 
-// Generic terminal self-test, shared by every cartridge. Room-specific intro
-// text is printed by the room itself once a cartridge is selected.
 static const BootLine bootSeq[] = {
-	{0.3f, "VFD-9000 PERSONAL TERMINAL UNIT"},
-	{0.6f, "(c) 1985 KOIVU & SONS SYSTEMS"},
-	{0.9f, ""},
-	{1.4f, "BIOS 2.31 .......... OK"},
-	{2.0f, "MEMORY TEST 640K ... OK"},
-	{2.7f, "SCANNING SERVICE BUS  OK"},
-	{3.2f, "LOADING SHELL ...... OK"},
-	{3.4f, ""},
+	{"VFD-9000 PERSONAL TERMINAL UNIT", false},
+	{"(c) 1985 KOIVU & SONS SYSTEMS", false},
+	{"", false},
+	{"BIOS 2.31", true},
+	{"MEMORY TEST 640K", true},
+	{"SCANNING SERVICE BUS", true},
+	{"LOADING SHELL", true},
+	{"", false},
 };
 #define BOOT_COUNT ((int) (sizeof(bootSeq) / sizeof(bootSeq[0])))
+
+// Boot animation pacing. Dots fill to BOOT_OKCOL so " OK" lines up on every row.
+#define BOOT_OKCOL 23
+#define BOOT_DOT_DT 0.08f	// seconds per dot -- the "working" tick
+#define BOOT_OK_DELAY 0.18f // pause after the dots before " OK" appears
+#define BOOT_LINE_GAP 0.20f // pause between boot lines
+enum { BP_WAIT, BP_DOTS, BP_OK, BP_NEXT };
+static int bootPhase = BP_WAIT;
+static int bootDots = 0;
 
 static void prompt_str(char *out, int outsz) {
 	char shown[128];
@@ -664,6 +674,16 @@ static bool ci_contains(const char *hay, const char *needle) {
 	return false;
 }
 
+// case-insensitive whole-string equality
+static bool ci_eq(const char *a, const char *b) {
+	while (*a && *b) {
+		if (tolower((unsigned char) *a) != tolower((unsigned char) *b)) return false;
+		a++;
+		b++;
+	}
+	return *a == 0 && *b == 0;
+}
+
 // mv SRC DST -- the engine's filesystem is read-only except for the one move a
 // room declares (mvSrc -> mvDst), modelled as hiding the source and revealing
 // the destination twin node. DST may be the full path or the target directory.
@@ -743,9 +763,82 @@ static void cmd_service(int argc, char **argv) {
 	}
 }
 
-// sql <query> -- a toy query tool over the room's in-memory table (dbPath). Only
-// works once the server is up; understands SELECT plus an optional WHERE that
-// filters rows by case-insensitive substring (good enough to find one record).
+// The room's `dbPath` node holds a catalog of tables. Each table is one block:
+// a header line `:: <name> | <description>` followed by its body lines (column
+// header, rule, rows) until the next header or end. build_secrets fills it in,
+// so the table set (incl. decoys) and which one hides the code are pure data.
+#define SQL_HDR ":: "
+
+// Extract a header line's name/desc into caller buffers. Returns false if `line`
+// is not a `:: name | desc` header.
+static bool sql_parse_header(const char *line, size_t len, char *name, int nsz, char *desc, int dsz) {
+	if (len < 3 || strncmp(line, SQL_HDR, 3) != 0) return false;
+	char buf[200];
+	if (len >= sizeof buf) len = sizeof buf - 1;
+	memcpy(buf, line, len);
+	buf[len] = '\0';
+	char *n = buf + 3;
+	char *bar = strstr(n, " | ");
+	if (bar) *bar = '\0';
+	snprintf(name, nsz, "%s", n);
+	snprintf(desc, dsz, "%s", bar ? bar + 3 : "");
+	return true;
+}
+
+// `\dt`: list every table in the catalog with its description.
+static void sql_list_tables(const char *cat) {
+	term_print("       List of tables");
+	term_print(" name      | description");
+	term_print("-----------+-------------------------------------");
+	int n = 0;
+	for (const char *p = cat; *p;) {
+		const char *nl = strchr(p, '\n');
+		size_t l = nl ? (size_t) (nl - p) : strlen(p);
+		char name[40], desc[120];
+		if (sql_parse_header(p, l, name, sizeof name, desc, sizeof desc)) {
+			term_printf(" %-9s | %s", name, desc);
+			n++;
+		}
+		if (!nl) break;
+		p = nl + 1;
+	}
+	term_printf("(%d table%s)", n, n == 1 ? "" : "s");
+}
+
+// Find table `name`'s body: returns a pointer to its first body line and sets
+// *bodyEnd to the start of the next header (or end of string), or NULL.
+static const char *sql_find_table(const char *cat, const char *name, const char **bodyEnd) {
+	for (const char *p = cat; *p;) {
+		const char *nl = strchr(p, '\n');
+		size_t l = nl ? (size_t) (nl - p) : strlen(p);
+		char tname[40], tdesc[120];
+		bool hdr = sql_parse_header(p, l, tname, sizeof tname, tdesc, sizeof tdesc);
+		if (hdr && ci_eq(tname, name)) {
+			const char *body = nl ? nl + 1 : p + l;
+			const char *q = body;
+			while (*q) { // walk to the next header line
+				const char *e = strchr(q, '\n');
+				size_t ql = e ? (size_t) (e - q) : strlen(q);
+				if (ql >= 3 && strncmp(q, SQL_HDR, 3) == 0) break;
+				if (!e) {
+					q += ql;
+					break;
+				}
+				q = e + 1;
+			}
+			*bodyEnd = q;
+			return body;
+		}
+		if (!nl) break;
+		p = nl + 1;
+	}
+	return NULL;
+}
+
+// sql <query> -- a toy query tool over the room's table catalog. Only works once
+// the server is up. Subcommands: `\?`/help (usage), `\dt` (list tables and what
+// they hold), and `SELECT * FROM <table>` with an optional substring `WHERE`.
+// The correct table name is never advertised -- the player discovers it via \dt.
 static void cmd_sql(int argc, char **argv) {
 	if (!activeRoom->dbName || !activeRoom->dbPath) {
 		term_print("sql: no database configured on this host");
@@ -756,28 +849,57 @@ static void cmd_sql(int argc, char **argv) {
 		if (activeRoom->svcName) term_printf("     start it:  service %s start", activeRoom->svcName);
 		return;
 	}
-	if (argc < 2) {
-		term_print("usage: sql <query>     e.g.  sql SELECT * FROM sales");
+	FsNode *cat = find_room_node(activeRoom->dbPath);
+	if (!cat || !cat->content) {
+		term_print("sql: catalog unavailable");
 		return;
 	}
 	char q[256] = "";
 	int len = 0;
 	for (int i = 1; i < argc && len < (int) sizeof q - 1; i++)
 		len += snprintf(q + len, sizeof q - len, "%s%s", i > 1 ? " " : "", argv[i]);
+
+	if (argc < 2 || ci_eq(q, "help") || ci_eq(q, "\\?") || ci_eq(q, "\\h")) {
+		term_printf("sql -- %s inventory query tool", activeRoom->dbName);
+		term_print("  \\dt              list tables and what each holds");
+		term_print("  SELECT * FROM T  dump table T");
+		term_print("  SELECT * FROM T WHERE x   keep rows containing x");
+		term_print("  \\?               this help");
+		return;
+	}
+	if (ci_eq(q, "\\dt") || ci_eq(q, "\\d") || ci_eq(q, "\\l") || ci_eq(q, "tables") || ci_eq(q, ".tables")) {
+		sql_list_tables(cat->content);
+		return;
+	}
 	if (!ci_contains(q, "select")) {
-		term_print("sql: only SELECT is supported on this build.");
+		term_print("sql: unrecognised input. try 'sql \\?' for help.");
 		return;
 	}
-	FsNode *tbl = find_room_node(activeRoom->dbPath);
-	if (!tbl || !tbl->content) {
-		term_print("sql: relation does not exist");
+	// table name after FROM
+	char tname[40] = "";
+	for (const char *p = q; *p; p++)
+		if ((p == q || p[-1] == ' ') && ci_prefix(p, "from ")) {
+			const char *s = p + 5;
+			while (*s == ' ') s++;
+			int k = 0;
+			while (*s && *s != ' ' && *s != ';' && k < (int) sizeof tname - 1) tname[k++] = *s++;
+			tname[k] = '\0';
+			break;
+		}
+	if (!tname[0]) {
+		term_print("sql: no table named. use '\\dt' to list the tables.");
 		return;
 	}
-	// optional `WHERE <needle>`: take the text after the last '=' or after
-	// "where ", strip quotes/spaces, and filter data rows by substring.
+	const char *bodyEnd = NULL;
+	const char *body = sql_find_table(cat->content, tname, &bodyEnd);
+	if (!body) {
+		term_printf("sql: relation \"%s\" does not exist ('\\dt' lists tables)", tname);
+		return;
+	}
+	// optional `WHERE <needle>`: text after the last '=' or after "where ",
+	// stripped of quotes/spaces, used as a case-insensitive row filter.
 	char needle[64] = "";
 	const char *w = NULL;
-	// find the WHERE clause (case-insensitive) and take the text after it
 	for (const char *p = q; *p; p++)
 		if ((p == q || p[-1] == ' ') && ci_prefix(p, "where ")) {
 			w = p + 5;
@@ -792,12 +914,12 @@ static void cmd_sql(int argc, char **argv) {
 		while (k > 0 && needle[k - 1] == ' ') k--;
 		needle[k] = '\0';
 	}
-	// print the table: keep the first two lines (header + rule) always, filter
-	// the rest by the needle. Count matched data rows for the row tally.
+	// print the chosen table's body: first two lines (column header + rule) are
+	// kept always, the rest filtered by the needle. Count matched data rows.
 	int rows = 0, lineNo = 0;
-	for (const char *p = tbl->content; *p;) {
-		const char *end = strchr(p, '\n');
-		size_t l = end ? (size_t) (end - p) : strlen(p);
+	for (const char *p = body; p < bodyEnd && *p;) {
+		const char *nl = memchr(p, '\n', (size_t) (bodyEnd - p));
+		size_t l = nl ? (size_t) (nl - p) : (size_t) (bodyEnd - p);
 		char line[COLS + 1];
 		if (l >= sizeof line) l = sizeof line - 1;
 		memcpy(line, p, l);
@@ -808,8 +930,8 @@ static void cmd_sql(int argc, char **argv) {
 			if (!header) rows++;
 		}
 		lineNo++;
-		if (!end) break;
-		p = end + 1;
+		if (!nl) break;
+		p = nl + 1;
 	}
 	term_printf("(%d row%s)", rows, rows == 1 ? "" : "s");
 }
@@ -819,6 +941,8 @@ static void boot_start(void) {
 	splashTimer = 0;
 	bootTimer = 0;
 	bootIndex = 0;
+	bootPhase = BP_WAIT;
+	bootDots = 0;
 	lineCount = 0;
 	scrollOff = 0;
 	revealLine = 0;
@@ -1324,13 +1448,55 @@ static void UpdateDrawFrame(void) {
 			if (splashTimer >= SPLASH_TIME) state = STATE_BOOT;
 		} else if (state == STATE_BOOT) {
 			bootTimer += dt;
-			while (bootIndex < BOOT_COUNT && bootTimer >= bootSeq[bootIndex].t) {
-				term_putline(bootSeq[bootIndex].s);
+			const BootLine *e = &bootSeq[bootIndex];
+			if (bootPhase == BP_WAIT) {
+				// hold a beat, then drop the label (worker lines get a trailing
+				// space the dots grow from)
+				if (bootTimer >= (bootIndex == 0 ? 0.3f : BOOT_LINE_GAP)) {
+					char buf[COLS + 1];
+					snprintf(buf, sizeof buf, "%s%s", e->label, e->worker ? " " : "");
+					term_putline(buf);
+					revealLine = lineCount; // boot draws in full; the dots are our reveal
+					revealCol = 0;
+					bootTimer = 0;
+					bootDots = 0;
+					bootPhase = e->worker ? BP_DOTS : BP_NEXT;
+				}
+			} else if (bootPhase == BP_DOTS) {
+				// tick dots out one at a time, filling to BOOT_OKCOL
+				int target = BOOT_OKCOL - 1 - (int) strlen(e->label);
+				if (target < 0) target = 0;
+				while (bootDots < target && bootTimer >= BOOT_DOT_DT) {
+					bootTimer -= BOOT_DOT_DT;
+					char *ln = termLines[lineCount - 1];
+					size_t L = strlen(ln);
+					if (L < COLS) {
+						ln[L] = '.';
+						ln[L + 1] = '\0';
+					}
+					bootDots++;
+				}
+				if (bootDots >= target) {
+					bootTimer = 0;
+					bootPhase = BP_OK;
+				}
+			} else if (bootPhase == BP_OK) {
+				// a beat of "thinking", then the result lands
+				if (bootTimer >= BOOT_OK_DELAY) {
+					char *ln = termLines[lineCount - 1];
+					size_t L = strlen(ln);
+					snprintf(ln + L, (size_t) (COLS + 1) - L, " OK");
+					bootTimer = 0;
+					bootPhase = BP_NEXT;
+				}
+			} else { // BP_NEXT: advance to the next line, or hand off to the menu
 				bootIndex++;
-			}
-			if (bootIndex == BOOT_COUNT) {
-				print_menu();
-				state = STATE_SELECT;
+				bootTimer = 0;
+				bootPhase = BP_WAIT;
+				if (bootIndex >= BOOT_COUNT) {
+					print_menu();
+					state = STATE_SELECT;
+				}
 			}
 		} else if (state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) {
 			for (int i = 0; i < g_charN; i++)
