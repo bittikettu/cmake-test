@@ -16,6 +16,9 @@
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h> // browser-driven main loop for the web build
 #include <emscripten/html5.h>	   // query the canvas CSS size for mobile scaling
+#define SHOW_KEYBOARD 1			   // on the web/mobile build there is no physical keyboard
+#else
+#define SHOW_KEYBOARD 0			   // native desktop has a real keyboard; hide the on-screen one
 #endif
 
 //----------------------------------------------------------------------------
@@ -47,6 +50,11 @@
 static Room *activeRoom = NULL;	  // selected cartridge
 static unsigned roomFlags = 0;	  // gate bits set during play
 static char doorCode[5] = "0000"; // rolled fresh on every room load
+
+// Door foley: the bolt slams shut when a cartridge is loaded, and the door
+// swings open on a win. Loaded in main(), played from load_room/cmd_unlock.
+static Sound doorCloseSfx;
+static Sound doorOpenSfx;
 
 //----------------------------------------------------------------------------
 // Terminal scrollback
@@ -145,9 +153,74 @@ static void resolve_path(const char *arg, char *out, int outsz) {
 	for (int i = 0; i < n && len < outsz; i++) len += snprintf(out + len, outsz - len, "/%s", parts[i]);
 }
 
+//----------------------------------------------------------------------------
+// Built-in commands. This table is the single source of truth for both the
+// `help` listing and the /usr/bin directory, so the advertised verbs and the
+// "installed" binaries can never drift apart. usage == NULL means the verb
+// works but `help` does not advertise it (it still shows up in /usr/bin).
+//----------------------------------------------------------------------------
+typedef struct {
+	const char *name;
+	const char *usage;
+} Builtin;
+
+static const Builtin g_builtins[] = {
+	{"help", "this text"},
+	{"ls", "list files (-a shows hidden): ls [DIR]"},
+	{"cd", "change directory: cd DIR"},
+	{"pwd", "print working directory"},
+	{"cat", "print a file: cat FILE"},
+	{"grep", "print matching lines: grep PAT FILE"},
+	{"tar", "extract an archive: tar -xf FILE"},
+	{"base64", "decode base64: base64 -d FILE"},
+	{"rot13", "rotate letters by 13: rot13 FILE"},
+	{"modprobe", "load a kernel module: modprobe NAME"},
+	{"lsmod", "list loaded modules"},
+	{"dmesg", "print kernel messages"},
+	{"unlock", "try a code on the door: unlock CODE"},
+	{"clear", "clear the screen"},
+	{"exit", "give up (the door stays locked)"},
+	{"echo", NULL},
+	{"whoami", NULL},
+	{"date", NULL},
+	{"sudo", NULL},
+	{"reboot", NULL},
+	{"logout", NULL},
+};
+#define BUILTIN_COUNT ((int) (sizeof(g_builtins) / sizeof(g_builtins[0])))
+
+// Engine-owned filesystem nodes for /usr and /usr/bin, shared by every room
+// and built once at startup from g_builtins, so `ls /usr/bin` reveals the
+// installed toolset. Rooms must not define their own /usr/bin.
+static FsNode binFs[BUILTIN_COUNT + 2];
+static char binPath[BUILTIN_COUNT][40];
+static char binStub[BUILTIN_COUNT][72];
+static int binCount;
+
+static void init_binfs(void) {
+	binCount = 0;
+	binFs[binCount++] = (FsNode) {"/usr", true, false, true, false, NULL};
+	binFs[binCount++] = (FsNode) {"/usr/bin", true, false, true, false, NULL};
+	for (int i = 0; i < BUILTIN_COUNT; i++) {
+		snprintf(binPath[i], sizeof binPath[i], "/usr/bin/%s", g_builtins[i].name);
+		snprintf(binStub[i], sizeof binStub[i], "ELF executable '%s' -- a command, not a cat toy.",
+				 g_builtins[i].name);
+		binFs[binCount++] = (FsNode) {binPath[i], false, false, true, false, binStub[i]};
+	}
+}
+
+// The visible filesystem is the active room's nodes plus the shared /usr/bin.
+static int fs_total(void) { return activeRoom->fsCount + binCount; }
+static FsNode *fs_at(int i) {
+	return i < activeRoom->fsCount ? &activeRoom->fs[i] : &binFs[i - activeRoom->fsCount];
+}
+
 static FsNode *find_node(const char *path) {
-	for (int i = 0; i < activeRoom->fsCount; i++)
-		if (activeRoom->fs[i].present && strcmp(activeRoom->fs[i].path, path) == 0) return &activeRoom->fs[i];
+	int total = fs_total();
+	for (int i = 0; i < total; i++) {
+		FsNode *n = fs_at(i);
+		if (n->present && strcmp(n->path, path) == 0) return n;
+	}
 	return NULL;
 }
 
@@ -273,18 +346,13 @@ static void cmd_help(void) {
 		term_print("help: not installed on this system. you chose l33t.");
 		return;
 	}
-	term_print("  help            this text");
-	term_print("  ls [-a] [DIR]   list files (-a shows hidden)");
-	term_print("  cd DIR          change directory     pwd   where am i");
-	term_print("  cat FILE        print a file");
-	term_print("  grep PAT FILE   print lines of FILE containing PAT");
-	term_print("  tar -xf FILE    extract an archive");
-	term_print("  base64 -d FILE  decode 'military grade' encryption");
-	term_print("  rot13 FILE      rotate letters by 13");
-	term_print("  modprobe NAME   load a kernel module");
-	term_print("  dmesg           kernel messages      lsmod loaded modules");
-	term_print("  unlock CODE     try a code on the door keypad");
-	term_print("  clear           clear screen         exit  good luck");
+	term_print("available commands (the full set is in /usr/bin):");
+	for (int i = 0; i < BUILTIN_COUNT; i++) {
+		if (!g_builtins[i].usage) continue;
+		char line[COLS + 1];
+		snprintf(line, sizeof line, "  %-8s %s", g_builtins[i].name, g_builtins[i].usage);
+		term_print(line);
+	}
 }
 
 static void cmd_ls(int argc, char **argv) {
@@ -309,18 +377,23 @@ static void cmd_ls(int argc, char **argv) {
 	}
 	char row[COLS + 1] = "";
 	int used = 0, shown = 0;
-	for (int i = 0; i < activeRoom->fsCount; i++) {
-		FsNode *n = &activeRoom->fs[i];
+	int total = fs_total();
+	const int colw = 16;
+	for (int i = 0; i < total; i++) {
+		FsNode *n = fs_at(i);
 		if (!n->present || !in_dir(n, path)) continue;
 		if (n->hidden && !all) continue;
 		char entry[64];
 		snprintf(entry, sizeof entry, "%s%s", base_name(n), n->isDir ? "/" : "");
-		if (used + 16 > COLS) {
+		// a name claims whole columns and always keeps a trailing gap, so long
+		// names (e.g. door_schematic.txt) print in full instead of being clipped
+		int width = ((int) strlen(entry) / colw + 1) * colw;
+		if (used > 0 && used + width > COLS) {
 			term_putline(row);
 			row[0] = '\0';
 			used = 0;
 		}
-		used += snprintf(row + used, sizeof row - used, "%-16s", entry);
+		used += snprintf(row + used, sizeof row - used, "%-*s", width, entry);
 		shown++;
 	}
 	if (used > 0) term_putline(row);
@@ -541,6 +614,7 @@ static void cmd_unlock(int argc, char **argv) {
 		if (!hardMode && activeRoom->codeMissingHint) term_print(activeRoom->codeMissingHint);
 		return;
 	}
+	if (doorOpenSfx.frameCount > 0) PlaySound(doorOpenSfx); // bolt retracts, door swings open
 	if (activeRoom->winArt) term_print(activeRoom->winArt);
 	int t = (int) (GetTime() - loginTime);
 	if (t >= 3600)
@@ -578,6 +652,7 @@ static void print_menu(void) {
 // A reboot drops loaded modules and re-rolls the code; the room's static
 // node table keeps any files extracted in a previous session.
 static void load_room(Room *r) {
+	if (doorCloseSfx.frameCount > 0) PlaySound(doorCloseSfx); // the bolt slams shut behind you
 	activeRoom = r;
 	roomFlags = 0;
 	wrongTries = 0;
@@ -896,6 +971,7 @@ static void init_keyboard(void) {
 	}
 }
 
+#if SHOW_KEYBOARD
 static void kb_activate(const Key *k) {
 	if (k->ch) {
 		if (g_charN < 64) g_chars[g_charN++] = k->ch;
@@ -934,6 +1010,7 @@ static void draw_key(Rectangle r, const Key *k, bool down) {
 				 (int) (face.y + (face.height - fs) / 2.0f), fs, (Color) {44, 41, 36, 255});
 	}
 }
+#endif // SHOW_KEYBOARD
 
 // Mechanical key-click samples; a random one plays on every key press.
 #define KEY_SFX_COUNT 18
@@ -997,6 +1074,10 @@ static void UpdateDrawFrame(void) {
 		float kbBoardX = (sw - kbBoardW) / 2.0f;
 		float kbBoardY = (float) (sh - margin) - kbBoardH;
 		float kbTopY = kbBoardY - kbU * 0.4f;
+#if !SHOW_KEYBOARD
+		// no on-screen keyboard on native: hand the whole strip back to the glass
+		kbTopY = (float) (sh - margin) + glassGap;
+#endif
 		Rectangle keyRects[KB_MAXKEYS];
 		for (int i = 0; i < flatN; i++)
 			keyRects[i] = (Rectangle) {kbBoardX + flatXU[i] * kbU, kbBoardY + flatRow[i] * kbRowH,
@@ -1025,8 +1106,10 @@ static void UpdateDrawFrame(void) {
 		while (GetKeyPressed() > 0) play_keysound();
 
 		// pointer over the on-screen keyboard (mouse, or touch mapped to mouse)
-		Vector2 mp = GetMousePosition();
 		g_kbHover = -1;
+		g_kbDown = false;
+#if SHOW_KEYBOARD
+		Vector2 mp = GetMousePosition();
 		for (int i = 0; i < flatN; i++)
 			if (CheckCollisionPointRec(mp, keyRects[i])) {
 				g_kbHover = i;
@@ -1037,6 +1120,7 @@ static void UpdateDrawFrame(void) {
 			kb_activate(flatKey[g_kbHover]);
 			play_keysound();
 		}
+#endif
 
 		//------------------------------------------------------------------ update
 		if (state == STATE_SPLASH) {
@@ -1260,6 +1344,7 @@ static void UpdateDrawFrame(void) {
 			}
 		}
 
+#if SHOW_KEYBOARD
 		// ---- on-screen keyboard: dark deck with sculpted beige keycaps ----
 		Rectangle deck = {(float) margin, kbTopY, (float) (sw - margin * 2), (float) (sh - margin) - kbTopY};
 		DrawRectangleRounded(deck, 0.05f, 8, (Color) {52, 49, 44, 255});
@@ -1269,6 +1354,7 @@ static void UpdateDrawFrame(void) {
 			bool down = (k->key && IsKeyDown(k->key)) || (g_kbDown && i == g_kbHover);
 			draw_key(keyRects[i], k, down);
 		}
+#endif
 
 		if (!compact) {
 			// bezel furniture: label, version, power LED
@@ -1312,6 +1398,20 @@ int main(void) {
 	runStarted = false;
 	if (bootMusic.frameCount > 0) PlayMusicStream(bootMusic);
 
+	// door foley: staged next to the exe (native) / preloaded at MEMFS root (web)
+	{
+		char p[1024];
+#if defined(__EMSCRIPTEN__)
+		const char *dir = "";
+#else
+		const char *dir = GetApplicationDirectory();
+#endif
+		snprintf(p, sizeof p, "%sfreesound_community-closing-metal-door-44280.mp3", dir);
+		doorCloseSfx = LoadSound(p);
+		snprintf(p, sizeof p, "%sfreesound_community-opening-metal-door-98518.mp3", dir);
+		doorOpenSfx = LoadSound(p);
+	}
+
 	// mechanical key-click bank (staged next to the exe / preloaded on web)
 	keySfxN = 0;
 	for (int i = 1; i <= KEY_SFX_COUNT; i++) {
@@ -1341,6 +1441,7 @@ int main(void) {
 	locBright = GetShaderLocation(crt, "uBright");
 
 	init_keyboard();
+	init_binfs();
 	boot_start();
 
 #if defined(__EMSCRIPTEN__)
@@ -1349,6 +1450,8 @@ int main(void) {
 	while (!WindowShouldClose()) UpdateDrawFrame();
 
 	for (int i = 0; i < keySfxN; i++) UnloadSound(keySfx[i]);
+	if (doorCloseSfx.frameCount > 0) UnloadSound(doorCloseSfx);
+	if (doorOpenSfx.frameCount > 0) UnloadSound(doorOpenSfx);
 	if (bootMusic.frameCount > 0) UnloadMusicStream(bootMusic);
 	if (runMusic.frameCount > 0) UnloadMusicStream(runMusic);
 	CloseAudioDevice();

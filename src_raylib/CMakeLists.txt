@@ -61,10 +61,12 @@ if(EMSCRIPTEN)
     "-sASYNCIFY"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3@boot.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/running.mp3@running.mp3"
+    "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3@freesound_community-closing-metal-door-44280.mp3"
+    "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3@freesound_community-opening-metal-door-98518.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses@separated_keypresses"
     "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
   set_target_properties(${APP_NAME} PROPERTIES LINK_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3;${CMAKE_CURRENT_SOURCE_DIR}/running.mp3")
+    "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3;${CMAKE_CURRENT_SOURCE_DIR}/running.mp3;${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3;${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3")
 else()
   # Native: stage the boot chime, room hum and key-click samples next to the exe.
   add_custom_command(TARGET ${APP_NAME} POST_BUILD
@@ -74,6 +76,12 @@ else()
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/running.mp3"
       "$<TARGET_FILE_DIR:${APP_NAME}>/running.mp3"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/freesound_community-closing-metal-door-44280.mp3"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/freesound_community-opening-metal-door-98518.mp3"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses"
       "$<TARGET_FILE_DIR:${APP_NAME}>/separated_keypresses")
