@@ -1021,11 +1021,20 @@ static void UpdateDrawFrame(void) {
 		float dt = GetFrameTime();
 		blink += dt;
 		if (bootMusic.frameCount > 0) UpdateMusicStream(bootMusic);
-		// the boot jingle is a one-shot; once it ends (or never loaded) hand
-		// off to the looping room hum so the soundtrack never falls silent
-		if (!runStarted && (bootMusic.frameCount == 0 || !IsMusicStreamPlaying(bootMusic))) {
-			runStarted = true;
-			if (runMusic.frameCount > 0) PlayMusicStream(runMusic);
+		// the boot jingle is a one-shot; hand off to the looping room hum so the
+		// soundtrack never falls silent. Pre-roll the hum ~0.3s before boot ends
+		// (a brief overlap) so its buffer is already playing when boot stops --
+		// starting it only after boot goes silent leaves an audible gap.
+		if (!runStarted) {
+			bool bootDone = bootMusic.frameCount == 0 || !IsMusicStreamPlaying(bootMusic);
+			if (!bootDone) {
+				float len = GetMusicTimeLength(bootMusic), pos = GetMusicTimePlayed(bootMusic);
+				if (len > 0.0f && pos >= len - 0.30f) bootDone = true;
+			}
+			if (bootDone) {
+				runStarted = true;
+				if (runMusic.frameCount > 0) PlayMusicStream(runMusic);
+			}
 		}
 		if (runStarted && runMusic.frameCount > 0) UpdateMusicStream(runMusic);
 
