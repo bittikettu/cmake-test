@@ -1446,6 +1446,7 @@ int main(void) {
 
 	init_keyboard();
 	init_binfs();
+	rooms_init(); // boot the Lua VM and load every DLC room from rooms/
 	boot_start();
 
 #if defined(__EMSCRIPTEN__)
@@ -1453,6 +1454,7 @@ int main(void) {
 #else
 	while (!WindowShouldClose()) UpdateDrawFrame();
 
+	rooms_shutdown(); // close the Lua VM and free loaded-room storage
 	for (int i = 0; i < keySfxN; i++) UnloadSound(keySfx[i]);
 	if (doorCloseSfx.frameCount > 0) UnloadSound(doorCloseSfx);
 	if (doorOpenSfx.frameCount > 0) UnloadSound(doorOpenSfx);

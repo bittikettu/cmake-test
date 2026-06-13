@@ -30,14 +30,21 @@ build/local_application_release/src_raylib/modular_cmake-raylib-app.exe
 cmake --workflow --preset app          # -> build/local_application_debug
 ```
 
-- raylib is fetched and compiled via `FetchContent` on first configure (slow
-  the first time, cached after).
-- There are **no runtime assets** — the VT323 font is embedded as
-  `src_raylib/vt323_data.h`, generated with `xxd -i` from
-  `src_raylib/resources/VT323-Regular.ttf`. Regenerate that header if the
-  font changes; it is not produced by the build.
+- raylib **and Lua** are fetched and compiled via `FetchContent` on first
+  configure (slow the first time, cached after). Lua (PUC 5.4) is built as a
+  static lib from its sources and powers the runtime-loaded DLC rooms.
+- The VT323 font is embedded as `src_raylib/vt323_data.h`, generated with
+  `xxd -i` from `src_raylib/resources/VT323-Regular.ttf`. Regenerate that
+  header if the font changes; it is not produced by the build.
+- Runtime assets *are* used: the audio (`*.mp3`, `separated_keypresses/`) and
+  the DLC rooms (`src_raylib/rooms/*.lua`) are staged next to the exe by a
+  POST_BUILD copy on native, and packed into the emscripten `.data` bundle via
+  `--preload-file` on web. The room loader reads them through raylib's
+  `LoadDirectoryFiles`/`LoadFileText`, which work against MEMFS on web.
 - It's a GUI app (opens a window); there is no headless/test mode. A clean
-  compile + link is the main signal that a change is sound.
+  compile + link is the main signal that a change is sound — but you can also
+  launch it briefly and grep stdout for `loaded DLC room: <file>` to confirm a
+  room registered.
 - The `lib` workflow preset / `BUILD_PHASE=library` path will fail right now
   because `lib/` is absent.
 
@@ -49,52 +56,79 @@ written into `version.h` (from `version.h.in`). It is shown on the bezel via
 
 ## Architecture (the important part)
 
-The game is split across three files in `src_raylib/`, along an
-**engine vs. content** seam. This split exists so new escape rooms ("DLC")
-can be added as pure data without touching engine code.
+The game is split along an **engine vs. content** seam. This split exists so
+new escape rooms ("DLC") can be added as **runtime-loaded `.lua` files**
+without touching (or recompiling) the engine.
 
 - **`room.h`** — the contract between engine and rooms. Defines `FsNode`
   (a virtual-filesystem entry), the `Room` struct, the gate-flag enum, the
-  cartridge registry (`g_rooms[]` / `g_roomCount`), and the four engine
-  helpers a room may call while building itself (`b64encode`, `rot13_buf`,
-  `set_content`, `set_present`).
+  mutable cartridge registry (`g_rooms[]` / `g_roomCount` + `register_room`,
+  `rooms_init`, `rooms_shutdown`), and the four engine helpers a room may call
+  while building itself (`b64encode`, `rot13_buf`, `set_content`,
+  `set_present`). The `Room`/`FsNode` structs are unchanged by the Lua layer —
+  a Lua-defined room produces an identical C `Room`.
 
 - **`main.c`** — the engine, room-agnostic. Owns: the terminal scrollback +
   teletype reveal, the CRT/VFD rendering, the command interpreter
   (`run_command` and the `cmd_*` functions), path resolution, and the
   game-state machine `BOOT → SELECT → LOGIN → SHELL → WIN`. All filesystem
   access goes through the **active room** (`activeRoom->fs`), not a global
-  table.
+  table. Calls `rooms_init()` at startup and `rooms_shutdown()` at exit.
 
-- **`rooms.c`** — the content packs. Each room is one `Room` struct plus two
-  short bespoke functions, registered in `g_rooms[]`. The "Cold Storage"
-  block is the working example and the copy-paste template for new rooms.
+- **`lua_rooms.c` / `lua_rooms.h`** — the Lua bridge. Owns one sandboxed
+  `lua_State` (only base/table/string/math opened; `dofile`/`loadfile`
+  removed — no host filesystem access). Exposes the engine helpers as a `vfd`
+  table (`vfd.b64encode`, `vfd.rot13`, `vfd.set_content`, `vfd.set_present`)
+  plus `vfd.register{...}`. `register` marshals a Lua table into a
+  heap-allocated `Room` + `FsNode[]` (every string copied into engine-owned
+  storage) and installs C **trampolines** for the room's two logic hooks that
+  call back into the stored Lua functions. `lua_rooms_load_all` scans the
+  rooms dir and runs each `.lua`; a broken room is skipped with a `WARNING`,
+  never fatal.
+
+- **`rooms.c`** — now just the mutable registry array + `rooms_init` (boot the
+  VM, load every `.lua`) / `rooms_shutdown`. No room content lives here.
+
+- **`rooms/*.lua`** — the content packs. `rooms/coldstore.lua` (Cold Storage)
+  is the working example and the copy-paste template for new rooms; its header
+  comment restates the authoring conventions. Native: a folder next to the exe
+  you can drop new files into (true drop-in DLC, no rebuild). Web: the same
+  folder, baked into the `.data` bundle at build time.
 
 ### How a room is wired (the gate/win model)
 
-A room is mostly declarative data. The puzzle gate is **data, not code**:
+A room is mostly declarative data (a Lua table). The puzzle gate is **data,
+not code**:
 
 - `roomFlags` (engine) is a bitmask of progress bits. A room's `winFlags`
   are the bits that must all be set before `unlock <code>` opens the door.
   A room with `winFlags == 0` has no gate.
 - A room may declare one optional **module gate**: `gateModule`, `gateFlag`,
-  `gateLogPath`, `gateLogBase`/`gateLogLoaded`, `gateLsmod`. The engine's
-  generic `modprobe`/`lsmod`/`dmesg` commands drive it — loading the module
-  sets the flag and swaps the kernel-log content. Cold Storage's
-  bolt-driver puzzle is expressed entirely through these fields.
-- The two per-room functions are the ~10% that can't be plain data:
-  `build_secrets(room, code, hard)` regenerates the encrypted clue files
-  from the freshly-rolled door code, and `apply_difficulty(room, hard)`
-  swaps file contents / visibility between the `n00b` and `l33t` variants.
+  `gateLogPath`, `gateLogBase`/`gateLogLoaded`, `gateLsmod` (all just keys in
+  the Lua table). The engine's generic `modprobe`/`lsmod`/`dmesg` commands
+  drive it — loading the module sets the flag and swaps the kernel-log content.
+  Cold Storage's bolt-driver puzzle is expressed entirely through these fields.
+  `winFlags`/`gateFlag` are plain integer bits the room picks (Cold Storage
+  uses `1`); the `FLAG_BOLT` enum in `room.h` is just documentation now.
+- The two per-room hooks are the ~10% that can't be plain data, written as Lua
+  **functions** in the room table: `build_secrets(code, hard)` regenerates the
+  encrypted clue files from the freshly-rolled door code (calling
+  `vfd.set_content` with `vfd.b64encode`/`vfd.rot13` output), and
+  `apply_difficulty(hard)` swaps file contents / visibility between the `n00b`
+  and `l33t` variants. Both are optional — omit them for a room with no
+  secrets/difficulty.
 - The door **code is re-rolled on every room load** (and in-game `reboot`),
-  so `build_secrets` must run at login, after the code exists.
+  so `build_secrets` runs at login, after the code exists.
 
 ### Adding a new room
-1. Copy the entire Cold Storage block in `rooms.c`, rename every symbol.
-2. Rewrite its `FsNode[]` table, `intro`, `winArt`, and the two functions.
-3. Append `&yourRoom` to `g_rooms[]`. It appears in the boot menu
-   automatically — no engine edits needed unless the room needs a brand-new
-   shell *verb* (a new `cmd_*` in `main.c`).
+1. Copy `src_raylib/rooms/coldstore.lua` to a new `.lua` file and rewrite its
+   `fs` table, `intro`, `winArt`, gate fields, and the two functions. Give it a
+   unique `id`/`title`. File content is a Lua string (use `[[ ... ]]`).
+2. It appears in the boot menu automatically — no engine edits needed unless
+   the room needs a brand-new shell *verb* (a new `cmd_*` in `main.c`).
+3. Native: drop the file in the `rooms/` folder next to the exe (no rebuild
+   needed). For the bundled/web build, add it under `src_raylib/rooms/` so the
+   POST_BUILD copy and the emscripten `--preload-file rooms@rooms` pick it up.
 
 ## Conventions for writing room content
 
@@ -102,12 +136,14 @@ These are real constraints; ignoring them produces broken or off-tone rooms.
 
 - **64 columns, ASCII only.** The renderer draws one codepoint per cell from
   the VT323 atlas; no Unicode box-drawing (use `+ - |`). Long lines wrap at
-  64 — author to ~60. File content is a single `const char *` with `\n`.
+  64 — author to ~60. File content is a Lua string (a `[[ ... ]]` long string
+  for multi-line artifacts; note Lua strips one leading newline after `[[`).
 - **Diegetic voice.** Every clue is an in-world artifact (a note, a log, a
   memo) signed by a character — never a narrator explaining the puzzle.
   ALL-CAPS for firmware/BIOS/management text; lowercase-terse for unix tool
   output. `n00b` artifacts name the next command; `l33t` strips the hints
-  but keeps the same world. The header comment in `rooms.c` restates this.
+  but keeps the same world. The header comment in `rooms/coldstore.lua`
+  restates this.
 
 ## Code style
 

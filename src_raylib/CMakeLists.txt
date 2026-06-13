@@ -19,6 +19,16 @@ FetchContent_Declare(
   GIT_SHALLOW On
 )
 
+# Lua powers runtime-loadable DLC rooms. The official mirror ships no CMake, so
+# we build a static lib from its sources below (works for native clang and the
+# emscripten/WASM build alike -- Lua is OS-agnostic ISO C).
+FetchContent_Declare(
+  lua
+  GIT_REPOSITORY https://github.com/lua/lua.git
+  GIT_TAG v5.4.6
+  GIT_SHALLOW On
+)
+
 #FetchContent_Declare(
 #  raygui
 #  GIT_REPOSITORY https://github.com/raysan5/raygui.git
@@ -36,16 +46,31 @@ if(EMSCRIPTEN)
   set(PLATFORM Web CACHE STRING "raylib platform" FORCE)
 endif()
 
-FetchContent_MakeAvailable(raylib)
+FetchContent_MakeAvailable(raylib lua)
+
+# Build Lua as a static lib from its sources (all .c live at the repo root).
+# Drop lua.c/luac.c -- those are the standalone interpreter/compiler mains, not
+# library code. No LUA_USE_* macro => pure ISO C: no dlopen/readline, which is
+# both maximally WASM-portable and keeps DLC scripts sandboxed.
+file(GLOB LUA_SRC "${lua_SOURCE_DIR}/*.c")
+# Drop the non-library sources: lua.c/luac.c (CLI mains), onelua.c (single-file
+# amalgamation that re-includes everything), ltests.c (internal test harness).
+list(REMOVE_ITEM LUA_SRC
+  "${lua_SOURCE_DIR}/lua.c"
+  "${lua_SOURCE_DIR}/luac.c"
+  "${lua_SOURCE_DIR}/onelua.c"
+  "${lua_SOURCE_DIR}/ltests.c")
+add_library(lua_static STATIC ${LUA_SRC})
+target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}")
 
 #set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
 file(GLOB_RECURSE  SOURCE_FILES "${CMAKE_SOURCE_DIR}/lib/*.c")
-set(SRC_FILES main.c rooms.c ${SOURCE_FILES})
+set(SRC_FILES main.c rooms.c lua_rooms.c ${SOURCE_FILES})
 include_directories(${CMAKE_SOURCE_DIR}/lib/)
 include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})
 
-target_link_libraries(${APP_NAME} PRIVATE raylib)
+target_link_libraries(${APP_NAME} PRIVATE raylib lua_static)
 
 if(EMSCRIPTEN)
   # Emit index.html/.js/.wasm/.data so GitHub Pages can serve it directly.
@@ -64,6 +89,7 @@ if(EMSCRIPTEN)
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3@freesound_community-closing-metal-door-44280.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3@freesound_community-opening-metal-door-98518.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses@separated_keypresses"
+    "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/rooms@rooms"
     "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
   set_target_properties(${APP_NAME} PROPERTIES LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3;${CMAKE_CURRENT_SOURCE_DIR}/running.mp3;${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3;${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3")
@@ -84,5 +110,9 @@ else()
       "$<TARGET_FILE_DIR:${APP_NAME}>/freesound_community-opening-metal-door-98518.mp3"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses"
-      "$<TARGET_FILE_DIR:${APP_NAME}>/separated_keypresses")
+      "$<TARGET_FILE_DIR:${APP_NAME}>/separated_keypresses"
+    # DLC rooms: staged next to the exe so users can drop new .lua files in here.
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_CURRENT_SOURCE_DIR}/rooms"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/rooms")
 endif()

@@ -62,10 +62,17 @@ struct Room {
 };
 
 //----------------------------------------------------------------------------
-// Cartridge registry (defined in rooms.c).
+// Cartridge registry (defined in rooms.c). Rooms are no longer a fixed table:
+// they are loaded at runtime (from .lua DLC files) and appended here via
+// register_room(). rooms_init() boots the Lua loader and fills the registry.
 //----------------------------------------------------------------------------
-extern Room *const g_rooms[];
-extern const int g_roomCount;
+#define MAX_ROOMS 64
+extern Room *g_rooms[MAX_ROOMS];
+extern int g_roomCount;
+
+void register_room(Room *r); // append a room to g_rooms (ignored once full)
+void rooms_init(void);		 // start the Lua VM and load every DLC room
+void rooms_shutdown(void);	 // close the VM and free room storage (native exit)
 
 //----------------------------------------------------------------------------
 // Engine utilities a room may call while building itself.
