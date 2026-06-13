@@ -720,10 +720,10 @@ static const char *CRT_FS =
 	"uniform vec4 colDiffuse;\n"
 	"uniform vec2 uResolution;\n"
 	"uniform float uBright;\n"
-	"const float CURVE = 16.0;\n"
+	"const float CURVE = 32.0;\n"  // flatter glass for small mobile screens
 	"const float SCAN = 0.30;\n"
 	"const float VIGN = 0.28;\n"
-	"const float CHROMA = 0.07;\n"
+	"const float CHROMA = 0.035;\n"  // less colour fringing -> sharper small text
 	"vec2 curve(vec2 uv){\n"
 	"    uv = uv*2.0-1.0;\n"
 	"    vec2 off = abs(uv.yx)/CURVE;\n"
