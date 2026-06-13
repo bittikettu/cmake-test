@@ -806,6 +806,8 @@ static RenderTexture2D virt;
 static Shader crt;
 static int locRes, locBright;
 static Music bootMusic;
+static Music runMusic;	  // looping room hum that follows the boot jingle
+static bool runStarted;	  // set once the boot jingle has handed off to runMusic
 static char input[INPUT_MAX + 1];
 static int inputLen;
 static char history[HIST_MAX][INPUT_MAX + 1];
@@ -947,6 +949,13 @@ static void UpdateDrawFrame(void) {
 		float dt = GetFrameTime();
 		blink += dt;
 		if (bootMusic.frameCount > 0) UpdateMusicStream(bootMusic);
+		// the boot jingle is a one-shot; once it ends (or never loaded) hand
+		// off to the looping room hum so the soundtrack never falls silent
+		if (!runStarted && (bootMusic.frameCount == 0 || !IsMusicStreamPlaying(bootMusic))) {
+			runStarted = true;
+			if (runMusic.frameCount > 0) PlayMusicStream(runMusic);
+		}
+		if (runStarted && runMusic.frameCount > 0) UpdateMusicStream(runMusic);
 
 		bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
 		if (IsKeyPressed(KEY_F11) || (altDown && IsKeyPressed(KEY_ENTER))) ToggleBorderlessWindowed();
@@ -1283,15 +1292,21 @@ int main(void) {
 
 	InitAudioDevice();
 #if defined(__EMSCRIPTEN__)
-	// emcc preloads boot.mp3 into MEMFS at the working-directory root
+	// emcc preloads boot.mp3/running.mp3 into MEMFS at the working-directory root
 	bootMusic = LoadMusicStream("boot.mp3");
+	runMusic = LoadMusicStream("running.mp3");
 #else
-	// the mp3 is staged next to the executable by CMake; resolve from there
+	// the mp3s are staged next to the executable by CMake; resolve from there
 	char bootPath[1024];
 	snprintf(bootPath, sizeof bootPath, "%sboot.mp3", GetApplicationDirectory());
 	bootMusic = LoadMusicStream(bootPath);
+	char runPath[1024];
+	snprintf(runPath, sizeof runPath, "%srunning.mp3", GetApplicationDirectory());
+	runMusic = LoadMusicStream(runPath);
 #endif
 	bootMusic.looping = false;
+	runMusic.looping = true;
+	runStarted = false;
 	if (bootMusic.frameCount > 0) PlayMusicStream(bootMusic);
 
 	// mechanical key-click bank (staged next to the exe / preloaded on web)
@@ -1332,6 +1347,7 @@ int main(void) {
 
 	for (int i = 0; i < keySfxN; i++) UnloadSound(keySfx[i]);
 	if (bootMusic.frameCount > 0) UnloadMusicStream(bootMusic);
+	if (runMusic.frameCount > 0) UnloadMusicStream(runMusic);
 	CloseAudioDevice();
 	UnloadShader(crt);
 	UnloadFont(termFont);
