@@ -30,6 +30,20 @@ build/local_application_release/src_raylib/modular_cmake-raylib-app.exe
 cmake --workflow --preset app          # -> build/local_application_debug
 ```
 
+The **web / WASM build** goes through Docker (emscripten/emsdk 3.1.64), per the
+`Dockerfile` — there is no local emcc:
+
+```sh
+docker build -t vfd-9000-web .              # full build, served by nginx
+docker run --rm -p 8080:80 vfd-9000-web     # -> http://localhost:8080
+docker build --target webbuild -t vfd-web . # just compile-check the wasm
+```
+
+Output lands at `build-web/src_raylib/index.{html,js,wasm,data}`; the `.data`
+file is the preload bundle (font is embedded, but audio + `rooms/*.lua` are
+packed in). A clean `Linking C executable index.html` is the web build's
+success signal.
+
 - raylib **and Lua** are fetched and compiled via `FetchContent` on first
   configure (slow the first time, cached after). Lua (PUC 5.4) is built as a
   static lib from its sources and powers the runtime-loaded DLC rooms.
@@ -74,6 +88,12 @@ without touching (or recompiling) the engine.
   game-state machine `BOOT → SELECT → LOGIN → SHELL → WIN`. All filesystem
   access goes through the **active room** (`activeRoom->fs`), not a global
   table. Calls `rooms_init()` at startup and `rooms_shutdown()` at exit.
+  The shell verbs (`ls cd cat grep mv tar base64 rot13 modprobe lsmod dmesg
+  service sql unlock clear …`) are the `cmd_*` functions dispatched by
+  `run_command`. The `g_builtins[]` table is the **single source of truth**
+  for both `help` and the synthesized `/usr/bin` directory (so `ls /usr/bin`
+  lists the installed toolset) — add any new verb there or it won't be
+  discoverable.
 
 - **`lua_rooms.c` / `lua_rooms.h`** — the Lua bridge. Owns one sandboxed
   `lua_State` (only base/table/string/math opened; `dofile`/`loadfile`
@@ -110,6 +130,18 @@ not code**:
   Cold Storage's bolt-driver puzzle is expressed entirely through these fields.
   `winFlags`/`gateFlag` are plain integer bits the room picks (Cold Storage
   uses `1`); the `FLAG_BOLT` enum in `room.h` is just documentation now.
+- A room may declare one optional **service gate** (no kernel involvement):
+  `svcName`, `svcUnitPath`, `svcFlag`. The generic `service NAME start|status`
+  verb brings a stopped daemon up — but `start` succeeds only once
+  `svcUnitPath` is present at its canonical location, then sets `svcFlag`.
+  Pair it with a one-shot **move** puzzle (`mvSrc`/`mvDst`, driven by the
+  generic `mv` verb — the only writable operation on the otherwise read-only
+  fs; it hides `mvSrc` and reveals `mvDst`) and a **database** the generic
+  `sql` verb reads (`dbName` + `dbPath`, a hidden never-`present` node whose
+  content is the table dump; `SELECT` with an optional substring `WHERE`).
+  Cold Vault chains all three: untar the db, `mv` it into the data dir,
+  `service coldstore-db start`, then `sql SELECT * FROM sales` to read a code
+  filed as a rogue barcode. `rooms/coldvault.lua` is the worked example.
 - The two per-room hooks are the ~10% that can't be plain data, written as Lua
   **functions** in the room table: `build_secrets(code, hard)` regenerates the
   encrypted clue files from the freshly-rolled door code (calling
@@ -125,7 +157,10 @@ not code**:
    `fs` table, `intro`, `winArt`, gate fields, and the two functions. Give it a
    unique `id`/`title`. File content is a Lua string (use `[[ ... ]]`).
 2. It appears in the boot menu automatically — no engine edits needed unless
-   the room needs a brand-new shell *verb* (a new `cmd_*` in `main.c`).
+   the room needs a brand-new shell *verb*: add a `cmd_*` in `main.c`, dispatch
+   it from `run_command`, and register it in `g_builtins[]` (so `help` and
+   `/usr/bin` show it). Prefer making the verb generic + driven by `Room`
+   fields (as `service`/`mv`/`sql` are) over hard-coding room specifics.
 3. Native: drop the file in the `rooms/` folder next to the exe (no rebuild
    needed). For the bundled/web build, add it under `src_raylib/rooms/` so the
    POST_BUILD copy and the emscripten `--preload-file rooms@rooms` pick it up.

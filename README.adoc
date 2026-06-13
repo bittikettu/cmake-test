@@ -10,20 +10,23 @@ is rendered to look like an old vacuum fluorescent display — phosphor glow,
 curved glass, scanlines and flicker, all driven by a CRT post-processing
 shader. You wake up locked in the cold storage of *Koivu & Sons*; the only
 way out is the door keypad and a dusty terminal. Explore the virtual
-filesystem, decrypt the clue files, load the bolt driver, and let yourself
-out.
+filesystem, decrypt the clue files, bring the locked-down systems back online,
+and let yourself out.
 
-Written in C99 with https://www.raylib.com/[raylib]. The project also doubles
-as a modular CMake scaffold (git-derived versioning, a `BUILD_PHASE`
-library/app switch).
+Written in C99 with https://www.raylib.com/[raylib]. Escape rooms ("DLC") are
+authored as runtime-loaded Lua files, so new rooms need no engine changes. The
+project also doubles as a modular CMake scaffold (git-derived versioning, a
+`BUILD_PHASE` library/app switch).
 
 == Requirements
 
 * CMake (>= 3.20) and a build generator (Ninja).
 * A C compiler — the presets use Clang/LLVM.
-* `git` and `git-lfs` (the boot audio is stored via Git LFS, see below).
-* raylib is fetched and built automatically through CMake `FetchContent`; no
-  manual install is required.
+* `git` and `git-lfs` (the audio is stored via Git LFS, see below).
+* raylib *and Lua* are fetched and built automatically through CMake
+  `FetchContent`; no manual install is required.
+* For the browser build only: Docker (the Emscripten toolchain ships in the
+  image — no local emcc needed).
 
 On Linux, install the X11/Wayland/GL development packages raylib needs, e.g.
 on Debian/Ubuntu:
@@ -38,9 +41,9 @@ sudo apt install build-essential cmake ninja-build git git-lfs pkg-config \
 
 == Git LFS
 
-The boot chime `src_raylib/boot.mp3` is tracked with
-https://git-lfs.com/[Git LFS] (see `.gitattributes`). Install LFS once before
-cloning so the real audio is pulled instead of a pointer file:
+The audio files (`src_raylib/*.mp3` — boot chime, room hum, door foley) are
+tracked with https://git-lfs.com/[Git LFS] (see `.gitattributes`). Install LFS
+once before cloning so the real audio is pulled instead of pointer files:
 
 [source,sh]
 ----
@@ -65,9 +68,23 @@ build/local_application_release/src_raylib/modular_cmake-raylib-app.exe
 cmake --workflow --preset app
 ----
 
-raylib is compiled on the first configure (slow once, cached after). The
-terminal font is embedded in the binary; `boot.mp3` is copied next to the
-executable at build time, so the only runtime asset travels with the binary.
+raylib and Lua are compiled on the first configure (slow once, cached after).
+The terminal font is embedded in the binary; the audio (`*.mp3`,
+`separated_keypresses/`) and the DLC rooms (`src_raylib/rooms/*.lua`) are
+staged next to the executable at build time.
+
+=== Web (WASM) build
+
+The browser build is produced with Emscripten through Docker (see `Dockerfile`):
+
+[source,sh]
+----
+docker build -t vfd-9000-web .            # full build, served by nginx
+docker run --rm -p 8080:80 vfd-9000-web   # -> http://localhost:8080
+----
+
+It emits `index.{html,js,wasm,data}`; the rooms and audio are packed into the
+`.data` preload bundle and read from the in-memory filesystem at runtime.
 
 == How to play
 
@@ -81,9 +98,10 @@ executable at build time, so the only runtime asset travels with the binary.
 | `n00b` | guided — files tell you which command to use next
 | `l33t` | no hints, no `help` — relies on your own unix knowledge
 |===
-4. Use the shell (`ls`, `cat`, `grep`, `tar -xf`, `base64 -d`, `rot13`,
-   `modprobe`, `dmesg`, `lsmod`, ...) to recover the 4-digit door code and
-   satisfy the room's gate, then `unlock <code>`.
+4. Use the shell to recover the 4-digit door code and satisfy the room's gate,
+   then `unlock <code>`. Type `help` (or `ls /usr/bin`) to see the installed
+   tools: `ls cat grep mv tar base64 rot13 modprobe lsmod dmesg service sql
+   unlock`, and more.
 
 [cols="1,3"]
 |===
@@ -97,25 +115,29 @@ executable at build time, so the only runtime asset travels with the binary.
 == Architecture
 
 The game lives in `src_raylib/` and is split along an *engine vs. content*
-seam so new rooms can be added as data without touching engine code.
+seam so new rooms can be added as runtime-loaded Lua data without touching
+engine code.
 
 * `room.h` — the contract: `FsNode` (virtual-filesystem entry), the `Room`
-  struct, the gate-flag enum, the cartridge registry, and the engine helpers
-  a room may call.
+  struct, the gate fields, the mutable cartridge registry (`register_room`,
+  `rooms_init`), and the engine helpers a room may call.
 * `main.c` — the room-agnostic engine: terminal scrollback and teletype
-  reveal, the CRT/VFD rendering and shader, the command interpreter, and the
-  `SPLASH -> BOOT -> SELECT -> LOGIN -> SHELL -> WIN` state machine. All
-  filesystem access goes through the active room.
-* `rooms.c` — the content packs. Each room is one `Room` struct plus two short
-  functions (`build_secrets`, `apply_difficulty`), registered in `g_rooms[]`.
-  The "Cold Storage" block is the working example and the template for new
-  rooms.
+  reveal, the CRT/VFD rendering and shader, the command interpreter (the
+  `cmd_*` shell verbs), and the `SPLASH -> BOOT -> SELECT -> LOGIN -> SHELL ->
+  WIN` state machine. All filesystem access goes through the active room.
+* `lua_rooms.c` — the Lua bridge: a sandboxed Lua VM that exposes a `vfd.*`
+  API to rooms and turns each `rooms/*.lua` into a C `Room` at startup.
+* `rooms/*.lua` — the content packs ("DLC"), loaded at runtime. `coldstore.lua`
+  (Cold Storage, a decrypt-and-load-driver room) is the template; `coldvault.lua`
+  (Cold Vault, a database room) is a second worked example.
 
-To add a room: copy the Cold Storage block in `rooms.c`, rewrite its
-filesystem table and text, and append it to `g_rooms[]` — it appears in the
-boot menu automatically. The puzzle gate is data (`winFlags` plus an optional
-`modprobe` module gate), so most rooms need no engine changes. See `CLAUDE.md`
-and `src_raylib/README.md` for more detail.
+To add a room: copy `src_raylib/rooms/coldstore.lua`, rewrite its filesystem
+table and text, and give it a unique `id`/`title`. On native you can drop the
+file into the `rooms/` folder next to the executable with no rebuild; it
+appears in the boot menu automatically. The puzzle gate is data — `winFlags`
+plus an optional `modprobe` module gate, `service` daemon gate, file `mv`, or
+`sql` database — so most rooms need no engine changes. See `CLAUDE.md` for
+detail.
 
 == Contributing
 

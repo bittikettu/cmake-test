@@ -213,6 +213,13 @@ static int l_register(lua_State *Ls) {
 	r->gateLogBase = field_str(Ls, 1, "gateLogBase", lr);
 	r->gateLogLoaded = field_str(Ls, 1, "gateLogLoaded", lr);
 	r->gateLsmod = field_str(Ls, 1, "gateLsmod", lr);
+	r->svcName = field_str(Ls, 1, "svcName", lr);
+	r->svcUnitPath = field_str(Ls, 1, "svcUnitPath", lr);
+	r->svcFlag = field_uint(Ls, 1, "svcFlag", 0);
+	r->mvSrc = field_str(Ls, 1, "mvSrc", lr);
+	r->mvDst = field_str(Ls, 1, "mvDst", lr);
+	r->dbName = field_str(Ls, 1, "dbName", lr);
+	r->dbPath = field_str(Ls, 1, "dbPath", lr);
 	r->winArt = field_str(Ls, 1, "winArt", lr);
 	r->codeMissingMsg = field_str(Ls, 1, "codeMissingMsg", lr);
 	r->codeMissingHint = field_str(Ls, 1, "codeMissingHint", lr);

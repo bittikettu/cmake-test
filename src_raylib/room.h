@@ -52,6 +52,27 @@ struct Room {
 	const char *gateLogLoaded;
 	const char *gateLsmod;	  // line lsmod prints once the module is loaded
 
+	// Optional single service gate (a stopped daemon, no kernel involvement).
+	// `service <svcName> start` succeeds only once svcUnitPath is present at its
+	// canonical location (e.g. a db file moved + extracted into place); it then
+	// sets svcFlag. Use this as winFlags for a "get the system running" puzzle.
+	const char *svcName;	 // NULL if the room has no service
+	const char *svcUnitPath; // file that must be present for `start` to succeed
+	unsigned svcFlag;
+
+	// Optional single-file move puzzle: `mv <mvSrc> <mvDst>` (or into mvDst's
+	// directory) relocates a file, modelled as hiding mvSrc and revealing mvDst.
+	// Both must be declared as fs nodes; mvDst starts present=false.
+	const char *mvSrc;
+	const char *mvDst;
+
+	// Optional in-room database the `sql` tool reads once svcFlag is set. dbPath
+	// is a node (usually hidden + never-present, so only sql sees it) whose
+	// content is the table dump; build_secrets can rewrite it to inject the
+	// rolled code into one row.
+	const char *dbName;
+	const char *dbPath;
+
 	// Bespoke per-room logic (the ~10% a room can't express as plain data).
 	void (*build_secrets)(Room *r, const char *code, bool hard);
 	void (*apply_difficulty)(Room *r, bool hard);

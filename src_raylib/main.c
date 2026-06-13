@@ -3,6 +3,7 @@
 // file is the engine: terminal, command set, gate/win logic, and rendering.
 // Find the 4-digit door code, satisfy the room's gate, then: unlock <code>
 #define _CRT_SECURE_NO_WARNINGS
+#include <ctype.h>
 #include <math.h>
 #include <raylib.h>
 #include <stdarg.h>
@@ -171,12 +172,15 @@ static const Builtin g_builtins[] = {
 	{"pwd", "print working directory"},
 	{"cat", "print a file: cat FILE"},
 	{"grep", "print matching lines: grep PAT FILE"},
+	{"mv", "move a file: mv SRC DST"},
 	{"tar", "extract an archive: tar -xf FILE"},
 	{"base64", "decode base64: base64 -d FILE"},
 	{"rot13", "rotate letters by 13: rot13 FILE"},
 	{"modprobe", "load a kernel module: modprobe NAME"},
 	{"lsmod", "list loaded modules"},
 	{"dmesg", "print kernel messages"},
+	{"service", "control a daemon: service NAME start|status"},
+	{"sql", "query the database: sql SELECT ..."},
 	{"unlock", "try a code on the door: unlock CODE"},
 	{"clear", "clear the screen"},
 	{"exit", "give up (the door stays locked)"},
@@ -221,6 +225,16 @@ static FsNode *find_node(const char *path) {
 		FsNode *n = fs_at(i);
 		if (n->present && strcmp(n->path, path) == 0) return n;
 	}
+	return NULL;
+}
+
+// Find a room node by path ignoring its present flag -- used by the `sql` tool
+// so a database table can stay invisible to ls/cat (present=false) yet still be
+// queried, and have its content rewritten by build_secrets.
+static FsNode *find_room_node(const char *path) {
+	if (!activeRoom) return NULL;
+	for (int i = 0; i < activeRoom->fsCount; i++)
+		if (strcmp(activeRoom->fs[i].path, path) == 0) return &activeRoom->fs[i];
 	return NULL;
 }
 
@@ -497,8 +511,12 @@ static void cmd_tar(int argc, char **argv) {
 	for (int i = 0; i < activeRoom->fsCount; i++) {
 		if (!activeRoom->fs[i].present && pre && strncmp(activeRoom->fs[i].path, pre, pl) == 0) {
 			activeRoom->fs[i].present = true;
-			term_printf("x %s%s", activeRoom->fs[i].path + strlen("/home/guest/"),
-						activeRoom->fs[i].isDir ? "/" : "");
+			// tar lists members without a leading slash; trim the home prefix if
+			// present, otherwise just the leading '/', so any extract dir is tidy
+			const char *rel = activeRoom->fs[i].path;
+			if (strncmp(rel, "/home/guest/", 12) == 0) rel += 12;
+			else if (rel[0] == '/') rel += 1;
+			term_printf("x %s%s", rel, activeRoom->fs[i].isDir ? "/" : "");
 			any = true;
 		}
 	}
@@ -625,6 +643,177 @@ static void cmd_unlock(int argc, char **argv) {
 	state = STATE_WIN;
 }
 
+// case-insensitive prefix test (does s begin with pre?)
+static bool ci_prefix(const char *s, const char *pre) {
+	for (; *pre; s++, pre++)
+		if (tolower((unsigned char) *s) != tolower((unsigned char) *pre)) return false;
+	return true;
+}
+
+// case-insensitive substring search (haystack contains needle?)
+static bool ci_contains(const char *hay, const char *needle) {
+	if (!*needle) return true;
+	for (; *hay; hay++) {
+		const char *h = hay, *n = needle;
+		while (*h && *n && tolower((unsigned char) *h) == tolower((unsigned char) *n)) {
+			h++;
+			n++;
+		}
+		if (!*n) return true;
+	}
+	return false;
+}
+
+// mv SRC DST -- the engine's filesystem is read-only except for the one move a
+// room declares (mvSrc -> mvDst), modelled as hiding the source and revealing
+// the destination twin node. DST may be the full path or the target directory.
+static void cmd_mv(int argc, char **argv) {
+	if (argc < 3) {
+		term_print("usage: mv SRC DST");
+		return;
+	}
+	char src[256], dst[256];
+	resolve_path(argv[1], src, sizeof src);
+	resolve_path(argv[2], dst, sizeof dst);
+	if (!find_node(src)) {
+		term_printf("mv: cannot stat '%s': no such file", argv[1]);
+		return;
+	}
+	if (activeRoom->mvSrc && activeRoom->mvDst && strcmp(src, activeRoom->mvSrc) == 0) {
+		// the directory part of mvDst, so `mv x /dir/` and `mv x /dir/file` both work
+		char dstDir[256];
+		snprintf(dstDir, sizeof dstDir, "%s", activeRoom->mvDst);
+		char *slash = strrchr(dstDir, '/');
+		if (slash && slash != dstDir) *slash = '\0';
+		else snprintf(dstDir, sizeof dstDir, "/");
+		if (strcmp(dst, activeRoom->mvDst) == 0 || strcmp(dst, dstDir) == 0) {
+			set_present(activeRoom, activeRoom->mvSrc, false);
+			set_present(activeRoom, activeRoom->mvDst, true);
+			return; // silent on success, like the real mv
+		}
+		term_printf("mv: target '%s': not the directory that file belongs in", argv[2]);
+		return;
+	}
+	term_printf("mv: cannot move '%s': Read-only file system", argv[1]);
+}
+
+// service NAME start|stop|status|restart -- a stopped daemon a room can bring
+// up once its unit/data file is in place. Sets svcFlag (often the win gate).
+static void cmd_service(int argc, char **argv) {
+	if (!activeRoom->svcName) {
+		term_print("service: no services registered on this host");
+		return;
+	}
+	const char *name, *action;
+	if (argc >= 3) {
+		name = argv[1];
+		action = argv[2];
+	} else if (argc == 2) { // `service start` -> assume the one service
+		name = activeRoom->svcName;
+		action = argv[1];
+	} else {
+		term_printf("usage: service %s start|stop|status|restart", activeRoom->svcName);
+		return;
+	}
+	if (strcmp(name, activeRoom->svcName) != 0) {
+		term_printf("service: unit '%s' not found", name);
+		return;
+	}
+	bool up = (roomFlags & activeRoom->svcFlag) != 0;
+	if (strcmp(action, "status") == 0) {
+		term_printf("%s.service - cold storage inventory database", activeRoom->svcName);
+		term_printf("   active: %s", up ? "active (running)" : "inactive (dead)");
+	} else if (strcmp(action, "stop") == 0) {
+		roomFlags &= ~activeRoom->svcFlag;
+		term_printf("%s: server stopped.", activeRoom->svcName);
+	} else if (strcmp(action, "start") == 0 || strcmp(action, "restart") == 0) {
+		FsNode *unit = activeRoom->svcUnitPath ? find_node(activeRoom->svcUnitPath) : NULL;
+		if (!unit) {
+			term_printf("%s: start FAILED.", activeRoom->svcName);
+			term_printf("  data file not found: %s", activeRoom->svcUnitPath ? activeRoom->svcUnitPath : "?");
+			term_print("  (is the database file in the right directory, unpacked?)");
+			return;
+		}
+		roomFlags |= activeRoom->svcFlag;
+		term_printf("%s: starting database server ...", activeRoom->svcName);
+		term_print("  recovering write-ahead log ..... ok");
+		term_print("  database system is ready to accept connections");
+	} else {
+		term_printf("service: unknown action '%s'", action);
+	}
+}
+
+// sql <query> -- a toy query tool over the room's in-memory table (dbPath). Only
+// works once the server is up; understands SELECT plus an optional WHERE that
+// filters rows by case-insensitive substring (good enough to find one record).
+static void cmd_sql(int argc, char **argv) {
+	if (!activeRoom->dbName || !activeRoom->dbPath) {
+		term_print("sql: no database configured on this host");
+		return;
+	}
+	if (!(roomFlags & activeRoom->svcFlag)) {
+		term_printf("sql: could not connect to '%s': server not running.", activeRoom->dbName);
+		if (activeRoom->svcName) term_printf("     start it:  service %s start", activeRoom->svcName);
+		return;
+	}
+	if (argc < 2) {
+		term_print("usage: sql <query>     e.g.  sql SELECT * FROM sales");
+		return;
+	}
+	char q[256] = "";
+	int len = 0;
+	for (int i = 1; i < argc && len < (int) sizeof q - 1; i++)
+		len += snprintf(q + len, sizeof q - len, "%s%s", i > 1 ? " " : "", argv[i]);
+	if (!ci_contains(q, "select")) {
+		term_print("sql: only SELECT is supported on this build.");
+		return;
+	}
+	FsNode *tbl = find_room_node(activeRoom->dbPath);
+	if (!tbl || !tbl->content) {
+		term_print("sql: relation does not exist");
+		return;
+	}
+	// optional `WHERE <needle>`: take the text after the last '=' or after
+	// "where ", strip quotes/spaces, and filter data rows by substring.
+	char needle[64] = "";
+	const char *w = NULL;
+	// find the WHERE clause (case-insensitive) and take the text after it
+	for (const char *p = q; *p; p++)
+		if ((p == q || p[-1] == ' ') && ci_prefix(p, "where ")) {
+			w = p + 5;
+			break;
+		}
+	if (w) {
+		const char *eq = strchr(w, '=');
+		const char *s = eq ? eq + 1 : w;
+		while (*s == ' ' || *s == '\'' || *s == '"') s++;
+		int k = 0;
+		while (*s && *s != '\'' && *s != '"' && *s != ';' && k < (int) sizeof needle - 1) needle[k++] = *s++;
+		while (k > 0 && needle[k - 1] == ' ') k--;
+		needle[k] = '\0';
+	}
+	// print the table: keep the first two lines (header + rule) always, filter
+	// the rest by the needle. Count matched data rows for the row tally.
+	int rows = 0, lineNo = 0;
+	for (const char *p = tbl->content; *p;) {
+		const char *end = strchr(p, '\n');
+		size_t l = end ? (size_t) (end - p) : strlen(p);
+		char line[COLS + 1];
+		if (l >= sizeof line) l = sizeof line - 1;
+		memcpy(line, p, l);
+		line[l] = '\0';
+		bool header = lineNo < 2;
+		if (header || needle[0] == '\0' || ci_contains(line, needle)) {
+			term_print(line);
+			if (!header) rows++;
+		}
+		lineNo++;
+		if (!end) break;
+		p = end + 1;
+	}
+	term_printf("(%d row%s)", rows, rows == 1 ? "" : "s");
+}
+
 static void boot_start(void) {
 	state = STATE_SPLASH;
 	splashTimer = 0;
@@ -734,6 +923,9 @@ static void run_command(char *cmdline) {
 		if (log && log->content) term_print(log->content);
 		else term_print("dmesg: (no kernel log)");
 	}
+	else if (strcmp(argv[0], "mv") == 0) cmd_mv(argc, argv);
+	else if (strcmp(argv[0], "service") == 0) cmd_service(argc, argv);
+	else if (strcmp(argv[0], "sql") == 0) cmd_sql(argc, argv);
 	else if (strcmp(argv[0], "unlock") == 0) cmd_unlock(argc, argv);
 	else if (strcmp(argv[0], "clear") == 0) {
 		lineCount = 0;
