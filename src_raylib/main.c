@@ -961,10 +961,13 @@ static void UpdateDrawFrame(void) {
 		if (IsKeyPressed(KEY_F11) || (altDown && IsKeyPressed(KEY_ENTER))) ToggleBorderlessWindowed();
 
 #if defined(__EMSCRIPTEN__)
-		// keep the framebuffer matched to the responsive canvas CSS size
+		// Keep the framebuffer matched to the responsive layout size. We measure
+		// the (untransformed) #stage wrapper, not #canvas: the canvas carries a
+		// CSS transform for pinch-zoom, so its own rect grows while zoomed and
+		// would otherwise drive a per-frame resize storm. #stage stays put.
 		{
 			double cw = 0, chh = 0;
-			if (emscripten_get_element_css_size("#canvas", &cw, &chh) == EMSCRIPTEN_RESULT_SUCCESS) {
+			if (emscripten_get_element_css_size("#stage", &cw, &chh) == EMSCRIPTEN_RESULT_SUCCESS) {
 				int iw = (int) cw, ih = (int) chh;
 				if (iw > 0 && ih > 0 && (iw != GetScreenWidth() || ih != GetScreenHeight()))
 					SetWindowSize(iw, ih);

@@ -6,10 +6,15 @@
   <title>VFD-9000 — terminal escape room</title>
   <style>
     html, body { margin: 0; height: 100%; background: #0a0a0a; overflow: hidden; }
-    /* fill the device viewport so the unit scales on phones/tablets; touch-action
-       none keeps taps from scrolling/zooming the page while typing */
-    #canvas { display: block; width: 100vw; height: 100vh; background: #000;
-              outline: none; touch-action: none; }
+    /* #stage is the stable, never-transformed viewport box. The C frame loop
+       measures it to size the framebuffer; the canvas inside carries the
+       pinch-zoom transform, so its own size must not feed back into that. */
+    #stage { position: fixed; inset: 0; overflow: hidden; touch-action: none; }
+    /* fill the stage so the unit scales on phones/tablets; touch-action none
+       keeps taps from scrolling/zooming the page while typing */
+    #canvas { display: block; width: 100%; height: 100%; background: #000;
+              outline: none; touch-action: none;
+              transform-origin: 0 0; will-change: transform; }
     #note {
       position: fixed; left: 0; right: 0; bottom: 6px; text-align: center;
       color: #4a6b62; font: 12px ui-monospace, monospace; opacity: .7;
@@ -19,8 +24,10 @@
   </style>
 </head>
 <body>
-  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
-  <div id="note">click the screen to enable sound &middot; F11 fullscreen</div>
+  <div id="stage">
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  </div>
+  <div id="note">click the screen to enable sound &middot; pinch to zoom &middot; F11 fullscreen</div>
   <script>
     // Browsers block audio until a user gesture; hide the hint after first click.
     addEventListener('pointerdown', function () {
@@ -33,6 +40,69 @@
       print: function (t) { console.log(t); },
       printErr: function (t) { console.error(t); },
     };
+
+    // ---- two-finger pinch-zoom / pan (small phone screens make the VFD text
+    // tiny). One finger is left untouched so the on-screen keyboard still types;
+    // only multi-touch gestures are captured here. The zoom is a pure CSS
+    // transform on the canvas, so emscripten's touch->pixel mapping (which reads
+    // the canvas getBoundingClientRect) keeps hitting the right keys while zoomed.
+    (function () {
+      var stage = document.getElementById('stage');
+      var canvas = document.getElementById('canvas');
+      var MIN = 1, MAX = 4;             // zoom range
+      var scale = 1, ox = 0, oy = 0;    // transform: translate(ox,oy) scale(scale)
+      var pts = new Map();              // live touch points by pointerId
+      var pinch = null;                 // gesture anchor snapshot
+
+      function apply() {
+        // never let the magnified canvas pull away from the viewport edges
+        var minX = (1 - scale) * stage.clientWidth;
+        var minY = (1 - scale) * stage.clientHeight;
+        ox = Math.min(0, Math.max(minX, ox));
+        oy = Math.min(0, Math.max(minY, oy));
+        canvas.style.transform = 'translate(' + ox + 'px,' + oy + 'px) scale(' + scale + ')';
+      }
+      function list() { var a = []; pts.forEach(function (p) { a.push(p); }); return a; }
+      function mid(a) { return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2 }; }
+      function dist(a) { return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1; }
+      function begin() {
+        var a = list(), m = mid(a);
+        pinch = { d0: dist(a), mx: m.x, my: m.y, s0: scale, ox0: ox, oy0: oy };
+      }
+
+      addEventListener('pointerdown', function (e) {
+        if (e.pointerType !== 'touch') return;
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pts.size === 2) begin();
+      }, { capture: true });
+
+      addEventListener('pointermove', function (e) {
+        var p = pts.get(e.pointerId);
+        if (!p) return;
+        p.x = e.clientX; p.y = e.clientY;
+        if (pts.size < 2 || !pinch) return;
+        e.preventDefault(); e.stopPropagation();   // keep the game out of the pinch
+        var a = list(), m = mid(a);
+        scale = Math.min(MAX, Math.max(MIN, pinch.s0 * (dist(a) / pinch.d0)));
+        // anchor the content under the original finger-midpoint, then pan with it
+        var fx = (pinch.mx - pinch.ox0) / pinch.s0;
+        var fy = (pinch.my - pinch.oy0) / pinch.s0;
+        ox = m.x - scale * fx;
+        oy = m.y - scale * fy;
+        apply();
+      }, { capture: true });
+
+      function lift(e) {
+        if (!pts.has(e.pointerId)) return;
+        pts.delete(e.pointerId);
+        pinch = pts.size === 2 ? (begin(), pinch) : null;  // re-anchor on 3->2, else end
+      }
+      addEventListener('pointerup', lift, { capture: true });
+      addEventListener('pointercancel', lift, { capture: true });
+
+      // a magnified view can leave the canvas off-centre after a rotate/resize
+      addEventListener('resize', apply);
+    })();
   </script>
   {{{ SCRIPT }}}
 </body>
