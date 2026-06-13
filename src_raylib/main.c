@@ -798,7 +798,6 @@ static const char *CRT_FS =
 	"const float CURVE = 32.0;\n"  // flatter glass for small mobile screens
 	"const float SCAN = 0.30;\n"
 	"const float VIGN = 0.28;\n"
-	"const float CHROMA = 0.035;\n"  // less colour fringing -> sharper small text
 	"vec2 curve(vec2 uv){\n"
 	"    uv = uv*2.0-1.0;\n"
 	"    vec2 off = abs(uv.yx)/CURVE;\n"
@@ -810,11 +809,7 @@ static const char *CRT_FS =
 	"    vec2 e = smoothstep(vec2(0.0), vec2(0.006), uv)*smoothstep(vec2(0.0), vec2(0.006), 1.0-uv);\n"
 	"    float mask = e.x*e.y;\n"
 	"    vec2 d = uv-0.5;\n"
-	"    float ca = CHROMA*dot(d,d);\n"
-	"    vec3 col;\n"
-	"    col.r = texture2D(texture0, uv - d*ca).r;\n"
-	"    col.g = texture2D(texture0, uv).g;\n"
-	"    col.b = texture2D(texture0, uv + d*ca).b;\n"
+	"    vec3 col = texture2D(texture0, uv).rgb;\n" // no chroma fringing: small screens read sharper
 	"    vec2 px = 1.5/uResolution;\n"
 	"    vec3 glow = texture2D(texture0, uv+vec2(px.x,0.0)).rgb + texture2D(texture0, uv-vec2(px.x,0.0)).rgb\n"
 	"              + texture2D(texture0, uv+vec2(0.0,px.y)).rgb + texture2D(texture0, uv-vec2(0.0,px.y)).rgb;\n"
