@@ -1,66 +1,30 @@
-// engine.h -- the engine API that main.c (terminal, virtual filesystem,
-// rendering, state machine) exposes to commands.c (the shell command
-// interpreter). Only the symbols the shell needs live here; everything else in
-// main.c stays private to that translation unit.
+// engine.h -- the host API that main.c exposes to the Lua bridge (lua_rooms.c).
+// All game logic lives in Lua now; this is just the terminal/audio/control
+// surface the host.* bindings and the string helpers wrap.
 #ifndef ENGINE_H
 #define ENGINE_H
 
 #include <stdbool.h>
 
-#include "room.h"
+#define COLS 64 // terminal width in cells
 
-#define COLS 64 // terminal width in cells (shared by the engine and the shell)
-
-// Shared buffer sizes / paths (used by both the engine and the shell).
-#define PATH_BUF 256			   // a resolved virtual-filesystem path
-#define CWD_BUF 128				   // current working directory
-#define PROMPT_BUF 64			   // a rendered shell prompt ("user@vfd:dir$ ")
-#define DOORCODE_BUF 5			   // 4 digits + NUL
-#define USERNAME_BUF 16			   // login name
-#define HOME_DIR "/home/guest"	   // the player's home directory
-#define HOME_DIR_LEN ((int) sizeof(HOME_DIR) - 1) // strlen("/home/guest") == 11
-
-// Game-state machine. The shell only sets STATE_WIN (on a successful unlock).
+// Host phase. Only SPLASH/BOOT/SHELL are used by the host now (the Lua game
+// owns the real sub-mode); the rest stay for clarity.
 typedef enum { STATE_SPLASH, STATE_BOOT, STATE_SELECT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
 
-// Built-in command table -- the single source of truth for `help` and the
-// synthesized /usr/bin directory. usage == NULL: usable but not advertised.
-typedef struct {
-	const char *name;
-	const char *usage;
-} Builtin;
-extern const Builtin g_builtins[];
-extern const int g_builtinCount;
-
-// Active session state (defined in main.c; read/written by the shell).
-extern Room *activeRoom;
-extern unsigned roomFlags;
-extern char doorCode[DOORCODE_BUF];
-extern int wrongTries;
-extern bool hardMode;
-extern char username[USERNAME_BUF];
-extern double loginTime;
-extern GameState state;
-extern char cwd[CWD_BUF];
-
-// Terminal output.
+// Terminal output (defined in main.c; wrapped by the host.* Lua bindings).
 void term_putline(const char *s);
 void term_print(const char *s);
 void term_printf(const char *fmt, ...);
 void term_clear(void);
 
-// Virtual filesystem over the active room (plus the shared /usr/bin).
-void resolve_path(const char *arg, char *out, int outsz);
-FsNode *find_node(const char *path);
-FsNode *find_room_node(const char *path); // ignores the present flag (for `sql`)
-int fs_total(void);
-FsNode *fs_at(int i);
-bool in_dir(const FsNode *n, const char *dir);
-const char *base_name(const FsNode *n);
+// Audio + control hooks the Lua host calls.
+void play_door_open(void);		   // win foley
+void play_sound(const char *name); // "open" / "close" -- door foley by name
+void boot_start(void);			   // replay the boot animation (host.reboot)
 
-// Misc engine hooks the shell calls.
-void prompt_str(char *out, int outsz);
-void boot_start(void);	   // `reboot`
-void play_door_open(void); // win foley, on a successful unlock
+// String helpers exposed to Lua via vfd.*.
+void b64encode(const char *in, char *out, int outsz);
+void rot13_buf(const char *in, char *out, int outsz);
 
 #endif // ENGINE_H

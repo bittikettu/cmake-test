@@ -1,8 +1,8 @@
-// VFD-9000 — an escape-room engine in a fake unix shell, rendered like an old
-// vacuum fluorescent display. The rooms ("cartridges") live in rooms.c; this
-// file is the engine: terminal, virtual filesystem, rendering, and the
-// state machine. The shell command set lives in commands.c (engine API in
-// engine.h). Find the 4-digit door code, satisfy the gate, then: unlock <code>
+// VFD-9000 — an escape-room game in a fake unix shell, rendered like an old
+// vacuum fluorescent display. This file is the *host*: the terminal + teletype,
+// the CRT/VFD rendering, the on-screen keyboard, audio, input editing, and the
+// Lua VM. ALL game logic (the shell, the filesystem, the state machine) lives
+// in Lua -- game.lua + rooms/*.lua, driven through lua_rooms.c's game_* bridge.
 #define _CRT_SECURE_NO_WARNINGS
 #include <math.h>
 #include <raylib.h>
@@ -12,10 +12,8 @@
 #include <string.h>
 #include <version.h>
 
-#include "room.h"
-
-#include "commands.h" // run_command (the shell, in commands.c)
-#include "engine.h"   // engine API shared with commands.c (COLS, GameState, ...)
+#include "engine.h"	  // COLS, GameState, term_*, audio, b64encode/rot13_buf
+#include "lua_rooms.h" // game_* -- the Lua game host
 
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/emscripten.h> // browser-driven main loop for the web build
@@ -48,26 +46,14 @@
 #define INPUT_MAX 48
 #define HIST_MAX 16
 
-// Engine-local buffer sizes / limits (shared ones like PATH_BUF, HOME_DIR,
-// PROMPT_BUF, CWD_BUF live in engine.h).
-#define TERM_FMT_BUF 1024	// term_printf format scratch
-#define OS_PATH_BUF 1024	// a real on-disk path (asset loading)
-#define PATH_PARTS 32		// max components in a resolved path
-#define BIN_PATH_BUF 40		// a /usr/bin/<name> node path
-#define BIN_STUB_BUF 72		// a /usr/bin binary's stub "content"
-#define MAX_FRAME_CHARS 64	// typed characters buffered per frame
-#define DOOR_CODE_MIN 1000	// 4-digit door code, no leading zero
-#define DOOR_CODE_MAX 9999
+// Host-local buffer sizes / limits.
+#define TERM_FMT_BUF 1024  // term_printf format scratch
+#define OS_PATH_BUF 1024   // a real on-disk path (asset loading)
+#define MAX_FRAME_CHARS 64 // typed characters buffered per frame
+#define PROMPT_BUF 64	   // a rendered shell prompt
 
-//----------------------------------------------------------------------------
-// Active session state (engine-owned; the room supplies the content)
-//----------------------------------------------------------------------------
-Room *activeRoom = NULL;	  // selected cartridge
-unsigned roomFlags = 0;	  // gate bits set during play
-char doorCode[DOORCODE_BUF] = "0000"; // rolled fresh on every room load
-
-// Door foley: the bolt slams shut when a cartridge is loaded, and the door
-// swings open on a win. Loaded in main(), played from load_room/cmd_unlock.
+// Door foley: the bolt slams shut when a cartridge loads, the door swings open
+// on a win. Loaded in main(), played by the Lua host via play_sound("open"/"close").
 static Sound doorCloseSfx;
 static Sound doorOpenSfx;
 
@@ -149,164 +135,22 @@ void play_door_open(void) {
 	if (doorOpenSfx.frameCount > 0) PlaySound(doorOpenSfx);
 }
 
-//----------------------------------------------------------------------------
-// Filesystem access (over the active room's node table)
-//----------------------------------------------------------------------------
-char cwd[CWD_BUF] = HOME_DIR;
-
-void resolve_path(const char *arg, char *out, int outsz) {
-	char tmp[PATH_BUF];
-	if (arg[0] == '/')
-		snprintf(tmp, sizeof tmp, "%s", arg);
-	else if (strcmp(arg, "~") == 0 || strncmp(arg, "~/", 2) == 0)
-		snprintf(tmp, sizeof tmp, HOME_DIR "%s", arg + 1);
-	else
-		snprintf(tmp, sizeof tmp, "%s/%s", cwd, arg);
-
-	char buf[PATH_BUF];
-	snprintf(buf, sizeof buf, "%s", tmp);
-	char *parts[PATH_PARTS];
-	int n = 0;
-	for (char *tok = strtok(buf, "/"); tok && n < PATH_PARTS; tok = strtok(NULL, "/")) {
-		if (strcmp(tok, ".") == 0) continue;
-		if (strcmp(tok, "..") == 0) {
-			if (n > 0) n--;
-			continue;
-		}
-		parts[n++] = tok;
-	}
-	if (n == 0) {
-		snprintf(out, outsz, "/");
-		return;
-	}
-	int len = 0;
-	out[0] = '\0';
-	for (int i = 0; i < n && len < outsz; i++) len += snprintf(out + len, outsz - len, "/%s", parts[i]);
+// Door foley by name, for the Lua host API (host.play).
+void play_sound(const char *name) {
+	if (strcmp(name, "open") == 0) play_door_open();
+	else if (strcmp(name, "close") == 0 && doorCloseSfx.frameCount > 0) PlaySound(doorCloseSfx);
 }
 
 //----------------------------------------------------------------------------
-// Built-in commands. This table is the single source of truth for both the
-// `help` listing and the /usr/bin directory, so the advertised verbs and the
-// "installed" binaries can never drift apart. usage == NULL means the verb
-// works but `help` does not advertise it (it still shows up in /usr/bin).
-// (the Builtin type lives in engine.h, shared with the shell)
+// Host-side phase: SPLASH/BOOT are presentation; once boot finishes the host is
+// "interactive" (STATE_SHELL) and the Lua game owns the real sub-mode
+// (select/login/shell/win), queried via game_mode().
 //----------------------------------------------------------------------------
-const Builtin g_builtins[] = {
-	{"help", "this text"},
-	{"ls", "list files (-a shows hidden): ls [DIR]"},
-	{"cd", "change directory: cd DIR"},
-	{"pwd", "print working directory"},
-	{"cat", "print a file: cat FILE"},
-	{"grep", "print matching lines: grep PAT FILE"},
-	{"mv", "move a file: mv SRC DST"},
-	{"tar", "extract an archive: tar -xf FILE"},
-	{"base64", "decode base64: base64 -d FILE"},
-	{"rot13", "rotate letters by 13: rot13 FILE"},
-	{"modprobe", "load a kernel module: modprobe NAME"},
-	{"lsmod", "list loaded modules"},
-	{"dmesg", "print kernel messages"},
-	{"service", "control a daemon: service NAME start|status"},
-	{"sql", "query the database (sql \\? for help)"},
-	{"unlock", "try a code on the door: unlock CODE"},
-	{"clear", "clear the screen"},
-	{"exit", "give up (the door stays locked)"},
-	{"echo", NULL},
-	{"whoami", NULL},
-	{"date", NULL},
-	{"sudo", NULL},
-	{"reboot", NULL},
-	{"logout", NULL},
-};
-#define BUILTIN_COUNT ((int) (sizeof(g_builtins) / sizeof(g_builtins[0])))
-const int g_builtinCount = BUILTIN_COUNT; // exposed to the shell (engine.h)
-
-// Engine-owned filesystem nodes for /usr and /usr/bin, shared by every room
-// and built once at startup from g_builtins, so `ls /usr/bin` reveals the
-// installed toolset. Rooms must not define their own /usr/bin.
-static FsNode binFs[BUILTIN_COUNT + 2];
-static char binPath[BUILTIN_COUNT][BIN_PATH_BUF];
-static char binStub[BUILTIN_COUNT][BIN_STUB_BUF];
-static int binCount;
-
-static void init_binfs(void) {
-	binCount = 0;
-	binFs[binCount++] = (FsNode) {"/usr", true, false, true, false, NULL};
-	binFs[binCount++] = (FsNode) {"/usr/bin", true, false, true, false, NULL};
-	for (int i = 0; i < BUILTIN_COUNT; i++) {
-		snprintf(binPath[i], sizeof binPath[i], "/usr/bin/%s", g_builtins[i].name);
-		snprintf(binStub[i], sizeof binStub[i], "ELF executable '%s' -- a command, not a cat toy.",
-				 g_builtins[i].name);
-		binFs[binCount++] = (FsNode) {binPath[i], false, false, true, false, binStub[i]};
-	}
-}
-
-// The visible filesystem is the active room's nodes plus the shared /usr/bin.
-int fs_total(void) { return activeRoom->fsCount + binCount; }
-FsNode *fs_at(int i) {
-	return i < activeRoom->fsCount ? &activeRoom->fs[i] : &binFs[i - activeRoom->fsCount];
-}
-
-FsNode *find_node(const char *path) {
-	int total = fs_total();
-	for (int i = 0; i < total; i++) {
-		FsNode *n = fs_at(i);
-		if (n->present && strcmp(n->path, path) == 0) return n;
-	}
-	return NULL;
-}
-
-// Find a room node by path ignoring its present flag -- used by the `sql` tool
-// so a database table can stay invisible to ls/cat (present=false) yet still be
-// queried, and have its content rewritten by build_secrets.
-FsNode *find_room_node(const char *path) {
-	if (!activeRoom) return NULL;
-	for (int i = 0; i < activeRoom->fsCount; i++)
-		if (strcmp(activeRoom->fs[i].path, path) == 0) return &activeRoom->fs[i];
-	return NULL;
-}
-
-// True if node's path is directly inside dir.
-bool in_dir(const FsNode *n, const char *dir) {
-	size_t dl = strcmp(dir, "/") == 0 ? 0 : strlen(dir);
-	if (strncmp(n->path, dir, dl) != 0) return false;
-	if (n->path[dl] != '/') return false;
-	return strchr(n->path + dl + 1, '/') == NULL;
-}
-
-const char *base_name(const FsNode *n) {
-	const char *s = strrchr(n->path, '/');
-	return s ? s + 1 : n->path;
-}
-
-// Exposed to rooms (declared in room.h) so they can shape themselves.
-void set_content(Room *r, const char *path, const char *content) {
-	for (int i = 0; i < r->fsCount; i++)
-		if (strcmp(r->fs[i].path, path) == 0) {
-			r->fs[i].content = content;
-			return;
-		}
-}
-
-void set_present(Room *r, const char *path, bool present) {
-	for (int i = 0; i < r->fsCount; i++)
-		if (strcmp(r->fs[i].path, path) == 0) {
-			r->fs[i].present = present;
-			return;
-		}
-}
-
-//----------------------------------------------------------------------------
-// Game state (GameState enum lives in engine.h, shared with the shell)
-//----------------------------------------------------------------------------
-GameState state = STATE_SPLASH;
+static GameState state = STATE_SPLASH;
 #define SPLASH_TIME 8.0f // manufacturer logo dwell before the boot sequence
 static float splashTimer = 0;
 static float bootTimer = 0;
 static int bootIndex = 0;
-int wrongTries = 0;
-bool hardMode = false;
-char username[USERNAME_BUF] = "guest";
-double loginTime = 0; // escape timer starts at login
 
 // A boot self-test line. A "worker" line drops its label, then ticks dots out
 // one at a time (so it looks like it's grinding through real work) before " OK"
@@ -337,25 +181,8 @@ enum { BP_WAIT, BP_DOTS, BP_OK, BP_NEXT };
 static int bootPhase = BP_WAIT;
 static int bootDots = 0;
 
-void prompt_str(char *out, int outsz) {
-	char shown[CWD_BUF];
-	if (state == STATE_SELECT) {
-		snprintf(out, outsz, "load cartridge: ");
-		return;
-	}
-	if (state == STATE_LOGIN) {
-		snprintf(out, outsz, "vfd-9000 login: ");
-		return;
-	}
-	if (strncmp(cwd, HOME_DIR, HOME_DIR_LEN) == 0)
-		snprintf(shown, sizeof shown, "~%s", cwd + HOME_DIR_LEN);
-	else
-		snprintf(shown, sizeof shown, "%s", cwd);
-	snprintf(out, outsz, "%s@vfd:%s$ ", username, shown);
-}
-
 //----------------------------------------------------------------------------
-// Text transforms shared with rooms (declared in room.h)
+// String helpers exposed to Lua via vfd.* (declared in engine.h)
 //----------------------------------------------------------------------------
 void rot13_buf(const char *in, char *out, int outsz) {
 	int len = 0;
@@ -402,74 +229,6 @@ void boot_start(void) {
 	revealAcc = 0;
 	lineGlow = 0;
 	glowedLine = -1;
-	activeRoom = NULL;
-	roomFlags = 0;
-}
-
-static void print_menu(void) {
-	term_print("");
-	term_print("SERVICE CARTRIDGES DETECTED:");
-	for (int i = 0; i < g_roomCount; i++) term_printf("  %d) %s", i + 1, g_rooms[i]->title);
-	term_print("");
-	term_print("insert a number and press ENTER.");
-}
-
-// A reboot drops loaded modules and re-rolls the code; the room's static
-// node table keeps any files extracted in a previous session.
-static void load_room(Room *r) {
-	if (doorCloseSfx.frameCount > 0) PlaySound(doorCloseSfx); // the bolt slams shut behind you
-	activeRoom = r;
-	roomFlags = 0;
-	wrongTries = 0;
-	snprintf(cwd, sizeof cwd, HOME_DIR);
-	// new door code every load; 1000+ avoids leading-zero confusion
-	snprintf(doorCode, sizeof doorCode, "%d", GetRandomValue(DOOR_CODE_MIN, DOOR_CODE_MAX));
-	if (r->gateLogPath) set_content(r, r->gateLogPath, r->gateLogBase);
-	term_print(r->intro);
-	term_print("");
-	term_print("ACCOUNTS:  n00b (guided)    l33t (you are on your own)");
-	term_print("");
-	state = STATE_LOGIN;
-}
-
-static void select_room(const char *sel) {
-	int idx = -1;
-	if (sel[0] >= '1' && sel[0] <= '9' && sel[1] == '\0') {
-		idx = sel[0] - '1';
-	} else {
-		for (int i = 0; i < g_roomCount; i++)
-			if (strcmp(sel, g_rooms[i]->id) == 0) idx = i;
-	}
-	if (idx < 0 || idx >= g_roomCount) {
-		term_print("no such cartridge. type the number.");
-		return;
-	}
-	load_room(g_rooms[idx]);
-}
-
-static void do_login(const char *name) {
-	char echo[COLS + 1];
-	snprintf(echo, sizeof echo, "vfd-9000 login: %s", name);
-	term_putline(echo);
-	if (strcmp(name, "n00b") == 0 || strcmp(name, "l33t") == 0) {
-		hardMode = (name[0] == 'l');
-		activeRoom->apply_difficulty(activeRoom, hardMode);
-		activeRoom->build_secrets(activeRoom, doorCode, hardMode);
-		snprintf(username, sizeof username, "%s", name);
-		loginTime = GetTime();
-		state = STATE_SHELL;
-		term_print("");
-		term_print("LAST LOGIN: 4119 DAYS AGO ON tty1");
-		if (hardMode)
-			term_print("welcome, l33t. there is no help on this system.");
-		else
-			term_print("welcome, n00b. type 'help' for commands.");
-		term_print("");
-	} else if (strcmp(name, "root") == 0) {
-		term_print("root login disabled on tty1.");
-	} else if (name[0] != '\0') {
-		term_print("login incorrect");
-	}
 }
 
 //----------------------------------------------------------------------------
@@ -879,69 +638,57 @@ static void UpdateDrawFrame(void) {
 					bootTimer = 0;
 					bootPhase = BP_NEXT;
 				}
-			} else { // BP_NEXT: advance to the next line, or hand off to the menu
+			} else { // BP_NEXT: advance to the next line, or hand off to the game
 				bootIndex++;
 				bootTimer = 0;
 				bootPhase = BP_WAIT;
 				if (bootIndex >= BOOT_COUNT) {
-					print_menu();
-					state = STATE_SELECT;
+					game_start(); // Lua prints the cartridge menu, enters select mode
+					state = STATE_SHELL;
 				}
 			}
-		} else if (state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) {
-			for (int i = 0; i < g_charN; i++)
-				if (inputLen < INPUT_MAX) {
-					input[inputLen++] = (char) g_chars[i];
-					input[inputLen] = '\0';
-				}
-			if (g_back && inputLen > 0) input[--inputLen] = '\0';
-			if (g_up && histCount > 0 && state == STATE_SHELL) {
-				if (histPos < histCount - 1) histPos++;
-				snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
-				inputLen = (int) strlen(input);
-			}
-			if (g_down && state == STATE_SHELL) {
-				if (histPos > 0) {
-					histPos--;
-					snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
-				} else {
-					histPos = -1;
-					input[0] = '\0';
-				}
-				inputLen = (int) strlen(input);
-			}
-			if (g_enter) {
-				if (state == STATE_SELECT) {
-					char echo[COLS + 1];
-					snprintf(echo, sizeof echo, "load cartridge: %s", input);
-					term_putline(echo);
-					char sel[INPUT_MAX + 1];
-					snprintf(sel, sizeof sel, "%s", input);
-					input[0] = '\0';
-					inputLen = 0;
-					select_room(sel);
-				} else if (state == STATE_LOGIN) {
-					char name[INPUT_MAX + 1];
-					snprintf(name, sizeof name, "%s", input);
-					input[0] = '\0';
-					inputLen = 0;
-					do_login(name);
-				} else if (inputLen > 0) {
-					if (histCount == HIST_MAX) {
-						memmove(history[0], history[1], sizeof(history[0]) * (HIST_MAX - 1));
-						histCount--;
+		} else if (state == STATE_SHELL) {
+			// Interactive: the host edits the input line + history; the Lua game
+			// owns the sub-mode (select/login/shell/win) and processes each line.
+			const char *mode = game_mode();
+			bool shellMode = strcmp(mode, "shell") == 0;
+			bool winMode = strcmp(mode, "win") == 0;
+			if (!winMode) {
+				for (int i = 0; i < g_charN; i++)
+					if (inputLen < INPUT_MAX) {
+						input[inputLen++] = (char) g_chars[i];
+						input[inputLen] = '\0';
 					}
-					snprintf(history[histCount++], INPUT_MAX + 1, "%s", input);
-					char cmdline[INPUT_MAX + 1];
-					snprintf(cmdline, sizeof cmdline, "%s", input);
+				if (g_back && inputLen > 0) input[--inputLen] = '\0';
+				if (g_up && histCount > 0 && shellMode) {
+					if (histPos < histCount - 1) histPos++;
+					snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
+					inputLen = (int) strlen(input);
+				}
+				if (g_down && shellMode) {
+					if (histPos > 0) {
+						histPos--;
+						snprintf(input, sizeof input, "%s", history[histCount - 1 - histPos]);
+					} else {
+						histPos = -1;
+						input[0] = '\0';
+					}
+					inputLen = (int) strlen(input);
+				}
+				if (g_enter) {
+					if (shellMode && inputLen > 0) { // shell command history
+						if (histCount == HIST_MAX) {
+							memmove(history[0], history[1], sizeof(history[0]) * (HIST_MAX - 1));
+							histCount--;
+						}
+						snprintf(history[histCount++], INPUT_MAX + 1, "%s", input);
+					}
+					char line[INPUT_MAX + 1];
+					snprintf(line, sizeof line, "%s", input);
 					input[0] = '\0';
 					inputLen = 0;
 					histPos = -1;
-					run_command(cmdline);
-				} else {
-					char prompt[PROMPT_BUF];
-					prompt_str(prompt, sizeof prompt);
-					term_putline(prompt);
+					game_submit(line); // Lua echoes the prompt+line and processes it
 				}
 			}
 		}
@@ -1029,11 +776,11 @@ static void UpdateDrawFrame(void) {
 			y += CELL_H;
 		}
 
-		// input line
+		// input line (the Lua game supplies the prompt; hidden once it's won)
 		int inputY = PAD_Y + VISROWS * CELL_H;
-		if ((state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) && scrollOff == 0 && !printing) {
+		if (state == STATE_SHELL && strcmp(game_mode(), "win") != 0 && scrollOff == 0 && !printing) {
 			char prompt[PROMPT_BUF], lineBuf[COLS + 1];
-			prompt_str(prompt, sizeof prompt);
+			game_prompt(prompt, sizeof prompt);
 			snprintf(lineBuf, sizeof lineBuf, "%s%s", prompt, input);
 			draw_mono(lineBuf, PAD_X, inputY, PHOSPHOR);
 			if (fmodf(blink, 1.0f) < 0.55f)
@@ -1112,7 +859,8 @@ static void UpdateDrawFrame(void) {
 			// bezel furniture: label, version, power LED
 			DrawText("VFD-9000", sw - 96, sh - 20, 10, (Color) {120, 112, 100, 255});
 			DrawText("v" PROJECT_VERSION "  F11 fullscreen", 12, sh - 20, 10, (Color) {90, 84, 76, 255});
-			Color led = state == STATE_WIN ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
+			bool won = state == STATE_SHELL && strcmp(game_mode(), "win") == 0;
+			Color led = won ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
 			if ((state == STATE_BOOT || state == STATE_SPLASH) && fmodf(blink, 0.4f) < 0.2f)
 				led = (Color) {120, 60, 30, 255};
 			DrawCircle(sw / 2, sh - 14, 4, led);
@@ -1193,8 +941,7 @@ int main(void) {
 	locBright = GetShaderLocation(crt, "uBright");
 
 	init_keyboard();
-	init_binfs();
-	rooms_init(); // boot the Lua VM and load every DLC room from rooms/
+	game_boot(); // create the Lua VM, load game.lua + the DLC rooms, self-test
 	boot_start();
 
 #if defined(__EMSCRIPTEN__)
@@ -1202,7 +949,7 @@ int main(void) {
 #else
 	while (!WindowShouldClose()) UpdateDrawFrame();
 
-	rooms_shutdown(); // close the Lua VM and free loaded-room storage
+	game_shutdown(); // close the Lua VM
 	for (int i = 0; i < keySfxN; i++) UnloadSound(keySfx[i]);
 	if (doorCloseSfx.frameCount > 0) UnloadSound(doorCloseSfx);
 	if (doorOpenSfx.frameCount > 0) UnloadSound(doorOpenSfx);

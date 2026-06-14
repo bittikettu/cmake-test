@@ -1,12 +1,15 @@
-// lua_rooms.h -- the Lua bridge for runtime-loadable DLC rooms. main.c/rooms.c
-// only need these three entry points; everything else (the vfd.* API, the
-// Room/FsNode marshalling, the per-room callback trampolines) is private to
-// lua_rooms.c.
+// lua_rooms.h -- the C side's view of the Lua game host (lua_rooms.c). The game
+// logic lives in Lua (game.lua + rooms/*.lua); C only boots the VM and drives
+// the game from the render/input loop.
 #ifndef LUA_ROOMS_H
 #define LUA_ROOMS_H
 
-void lua_rooms_init(void);	   // create the VM and expose the vfd.* engine API
-void lua_rooms_load_all(void); // load every .lua in the rooms dir (registers rooms)
-void lua_rooms_shutdown(void); // close the VM and free all loaded-room storage
+void game_boot(void);	  // create the VM, load game.lua + rooms, run the self-test
+void game_shutdown(void); // close the VM
+
+void game_start(void);				   // begin play (after the boot animation)
+void game_submit(const char *line);	   // hand a completed input line to the game
+void game_prompt(char *out, int outsz); // current input-line prompt
+const char *game_mode(void);		   // "boot"|"select"|"login"|"shell"|"win"
 
 #endif // LUA_ROOMS_H
