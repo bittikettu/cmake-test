@@ -114,22 +114,25 @@ It emits `index.{html,js,wasm,data}`; the rooms and audio are packed into the
 
 == Architecture
 
-The game lives in `src_raylib/` and is split along an *engine vs. content*
-seam so new rooms can be added as runtime-loaded Lua data without touching
-engine code.
+The game lives in `src_raylib/` and is split along a *host vs. game* seam:
+*C is the host*, and *all game logic is Lua*. New rooms — and new verbs — need
+no recompile.
 
-* `room.h` — the contract: `FsNode` (virtual-filesystem entry), the `Room`
-  struct, the gate fields, the mutable cartridge registry (`register_room`,
-  `rooms_init`), and the engine helpers a room may call.
-* `main.c` — the room-agnostic engine: terminal scrollback and teletype
-  reveal, the CRT/VFD rendering and shader, the command interpreter (the
-  `cmd_*` shell verbs), and the `SPLASH -> BOOT -> SELECT -> LOGIN -> SHELL ->
-  WIN` state machine. All filesystem access goes through the active room.
-* `lua_rooms.c` — the Lua bridge: a sandboxed Lua VM that exposes a `vfd.*`
-  API to rooms and turns each `rooms/*.lua` into a C `Room` at startup.
-* `rooms/*.lua` — the content packs ("DLC"), loaded at runtime. `coldstore.lua`
-  (Cold Storage, a decrypt-and-load-driver room) is the template; `coldvault.lua`
-  (Cold Vault, a database room) is a second worked example.
+* `main.c` — the host: terminal scrollback + teletype reveal, the CRT/VFD
+  rendering and shader, the on-screen keyboard, audio, input editing, and the
+  SPLASH/BOOT animation. After boot it drives the Lua game: each input line goes
+  to `game_submit`, and the prompt + sub-mode come from `game_prompt`/`game_mode`.
+* `engine.h` — the small host API main.c exposes (terminal output, audio,
+  `boot_start`, the `b64encode`/`rot13` string helpers).
+* `lua_rooms.c` — the Lua host bridge: a sandboxed VM exposing `vfd.*` (C string
+  helpers) and `host.*` (print/clear/play/reboot/time/rand), which loads
+  `game.lua` and every `rooms/*.lua` and bridges the loop.
+* `game.lua` — the whole game in Lua: the virtual filesystem, every shell verb,
+  the `select -> login -> shell -> win` state machine, and the gate/win logic.
+  It carries a scripted self-test that plays a full win at startup.
+* `rooms/*.lua` — the content packs ("DLC"), plain Lua tables read by `game.lua`.
+  `coldstore.lua` (Cold Storage) is the template; `coldvault.lua` (Cold Vault,
+  a database room) is a second worked example.
 
 To add a room: copy `src_raylib/rooms/coldstore.lua`, rewrite its filesystem
 table and text, and give it a unique `id`/`title`. On native you can drop the

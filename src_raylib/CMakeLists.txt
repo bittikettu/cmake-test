@@ -65,7 +65,7 @@ target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}")
 
 #set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
 file(GLOB_RECURSE  SOURCE_FILES "${CMAKE_SOURCE_DIR}/lib/*.c")
-set(SRC_FILES main.c commands.c rooms.c lua_rooms.c ${SOURCE_FILES})
+set(SRC_FILES main.c lua_rooms.c ${SOURCE_FILES})
 include_directories(${CMAKE_SOURCE_DIR}/lib/)
 include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})
@@ -90,6 +90,7 @@ if(EMSCRIPTEN)
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3@freesound_community-opening-metal-door-98518.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/separated_keypresses@separated_keypresses"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/rooms@rooms"
+    "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/game.lua@game.lua"
     "SHELL:--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/shell.html")
   set_target_properties(${APP_NAME} PROPERTIES LINK_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/shell.html;${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3;${CMAKE_CURRENT_SOURCE_DIR}/running.mp3;${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3;${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-opening-metal-door-98518.mp3")
@@ -114,5 +115,9 @@ else()
     # DLC rooms: staged next to the exe so users can drop new .lua files in here.
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${CMAKE_CURRENT_SOURCE_DIR}/rooms"
-      "$<TARGET_FILE_DIR:${APP_NAME}>/rooms")
+      "$<TARGET_FILE_DIR:${APP_NAME}>/rooms"
+    # first-party game logic (spike)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/game.lua"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/game.lua")
 endif()
