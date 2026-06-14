@@ -394,7 +394,7 @@ static const Key kbR3[] = {
 	{".", '.', KEY_PERIOD, 0, 1}, {"/", '/', KEY_SLASH, 0, 1}, {"SHIFT", 0, KEY_RIGHT_SHIFT, 0, 2.75f},
 };
 static const Key kbR4[] = {
-	{"CTRL", 0, KEY_LEFT_CONTROL, 0, 2}, {"ALT", 0, KEY_LEFT_ALT, 0, 2}, {"", ' ', KEY_SPACE, 0, 7},
+	{"CTRL", 0, KEY_LEFT_CONTROL, 0, 2}, {"FN", 0, KEY_LEFT_ALT, 0, 2}, {"", ' ', KEY_SPACE, 0, 7},
 	{"ALT", 0, KEY_RIGHT_ALT, 0, 2},	 {"CTRL", 0, KEY_RIGHT_CONTROL, 0, 2},
 };
 static const Key *const kbRows[5] = {kbR0, kbR1, kbR2, kbR3, kbR4};
@@ -411,9 +411,10 @@ static float kbUnits; // width of the widest row, in key units
 // and the on-screen keyboard so both drive one code path.
 static int g_chars[MAX_FRAME_CHARS];
 static int g_charN;
-static bool g_enter, g_back, g_up, g_down;
+static bool g_enter, g_back, g_up, g_down, g_left, g_right, g_pgup, g_pgdn;
 static int g_kbHover = -1; // on-screen key under the pointer, -1 = none
 static bool g_kbDown;	   // pointer (mouse/touch) is held down
+static bool g_fnToggled;   // navigation fn modifier state
 
 static void init_keyboard(void) {
 	flatN = 0;
@@ -432,8 +433,17 @@ static void init_keyboard(void) {
 }
 
 #if SHOW_KEYBOARD
-static void kb_activate(const Key *k) {
-	if (k->ch) {
+static void kb_activate(const Key *k, bool fnMode) {
+	if (k->key == KEY_LEFT_ALT) { g_fnToggled = !g_fnToggled; return; }
+	if (fnMode) {
+		if (k->key == KEY_W) { g_up = true; return; }
+		if (k->key == KEY_S) { g_down = true; return; }
+		if (k->key == KEY_A) { g_left = true; return; }
+		if (k->key == KEY_D) { g_right = true; return; }
+		if (k->key == KEY_Q) { g_pgup = true; return; }
+		if (k->key == KEY_E) { g_pgdn = true; return; }
+	}
+	if (k->ch && !fnMode) {
 		if (g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = k->ch;
 	} else if (k->action == 1) {
 		g_enter = true;
@@ -442,7 +452,7 @@ static void kb_activate(const Key *k) {
 	}
 }
 
-static void draw_key(Rectangle r, const Key *k, bool down) {
+static void draw_key(Rectangle r, const Key *k, bool down, bool fnMode) {
 	float drop = down ? r.height * 0.12f : 0.0f;
 	Rectangle face = {r.x, r.y + drop, r.width, r.height - drop};
 	// keywell shadow under the cap
@@ -462,11 +472,22 @@ static void draw_key(Rectangle r, const Key *k, bool down) {
 										 face.height * 0.06f + 1.0f},
 							 1.0f, 4, (Color) {120, 114, 102, 255});
 	}
-	if (k->label && k->label[0]) {
+
+	const char *label = k->label;
+	if (fnMode) {
+		if (k->key == KEY_W) label = "UP";
+		else if (k->key == KEY_S) label = "DWN";
+		else if (k->key == KEY_A) label = "LFT";
+		else if (k->key == KEY_D) label = "RGT";
+		else if (k->key == KEY_Q) label = "PGUP";
+		else if (k->key == KEY_E) label = "PGDN";
+	}
+
+	if (label && label[0]) {
 		int fs = (int) (r.height * 0.32f);
 		if (fs < 8) fs = 8;
-		int tw = MeasureText(k->label, fs);
-		DrawText(k->label, (int) (face.x + (face.width - tw) / 2.0f),
+		int tw = MeasureText(label, fs);
+		DrawText(label, (int) (face.x + (face.width - tw) / 2.0f),
 				 (int) (face.y + (face.height - fs) / 2.0f), fs, (Color) {44, 41, 36, 255});
 	}
 }
@@ -561,19 +582,6 @@ static void UpdateDrawFrame(void) {
 		float dw = VIRT_W * gscale, dh = VIRT_H * gscale;
 		Rectangle dst = {(sw - dw) / 2.0f, glassTop + (glassAreaH - dh) / 2.0f, dw, dh};
 
-		//------------------------------------------------------------------ gather input (physical + on-screen)
-		g_charN = 0;
-		g_enter = g_back = g_up = g_down = false;
-		int gch;
-		while ((gch = GetCharPressed()) > 0)
-			if (gch >= 32 && gch < 127 && g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = gch;
-		if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) g_back = true;
-		if (IsKeyPressed(KEY_ENTER) && !altDown) g_enter = true;
-		if (IsKeyPressed(KEY_UP)) g_up = true;
-		if (IsKeyPressed(KEY_DOWN)) g_down = true;
-		// a mechanical click on every physical key-down (its own queue, separate from chars)
-		while (GetKeyPressed() > 0) play_keysound();
-
 		// pointer over the on-screen keyboard (mouse, or touch mapped to mouse)
 		g_kbHover = -1;
 		g_kbDown = false;
@@ -585,8 +593,31 @@ static void UpdateDrawFrame(void) {
 				break;
 			}
 		g_kbDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+#endif
+
+		if (IsKeyPressed(KEY_LEFT_ALT)) g_fnToggled = !g_fnToggled;
+		bool fnMode = g_fnToggled;
+
+		//------------------------------------------------------------------ gather input (physical + on-screen)
+		g_charN = 0;
+		g_enter = g_back = g_up = g_down = g_left = g_right = g_pgup = g_pgdn = false;
+		int gch;
+		while ((gch = GetCharPressed()) > 0)
+			if (!fnMode && gch >= 32 && gch < 127 && g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = gch;
+		if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) g_back = true;
+		if (IsKeyPressed(KEY_ENTER) && !altDown) g_enter = true;
+		if (IsKeyPressed(KEY_UP) || (fnMode && (IsKeyPressed(KEY_W) || IsKeyPressedRepeat(KEY_W)))) g_up = true;
+		if (IsKeyPressed(KEY_DOWN) || (fnMode && (IsKeyPressed(KEY_S) || IsKeyPressedRepeat(KEY_S)))) g_down = true;
+		if (IsKeyPressed(KEY_LEFT) || (fnMode && (IsKeyPressed(KEY_A) || IsKeyPressedRepeat(KEY_A)))) g_left = true;
+		if (IsKeyPressed(KEY_RIGHT) || (fnMode && (IsKeyPressed(KEY_D) || IsKeyPressedRepeat(KEY_D)))) g_right = true;
+		if (IsKeyPressed(KEY_PAGE_UP) || (fnMode && (IsKeyPressed(KEY_Q) || IsKeyPressedRepeat(KEY_Q)))) g_pgup = true;
+		if (IsKeyPressed(KEY_PAGE_DOWN) || (fnMode && (IsKeyPressed(KEY_E) || IsKeyPressedRepeat(KEY_E)))) g_pgdn = true;
+		// a mechanical click on every physical key-down (its own queue, separate from chars)
+		while (GetKeyPressed() > 0) play_keysound();
+
+#if SHOW_KEYBOARD
 		if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && g_kbHover >= 0) {
-			kb_activate(flatKey[g_kbHover]);
+			kb_activate(flatKey[g_kbHover], fnMode);
 			play_keysound();
 		}
 #endif
@@ -853,7 +884,8 @@ static void UpdateDrawFrame(void) {
 		for (int i = 0; i < flatN; i++) {
 			const Key *k = flatKey[i];
 			bool down = (k->key && IsKeyDown(k->key)) || (g_kbDown && i == g_kbHover);
-			draw_key(keyRects[i], k, down);
+			if (k->key == KEY_LEFT_ALT && g_fnToggled) down = true;
+			draw_key(keyRects[i], k, down, fnMode);
 		}
 #endif
 
