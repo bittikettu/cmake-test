@@ -413,7 +413,6 @@ function verbs.service(args)
 		if not unit then
 			host.print(room.svcName .. ": start FAILED.")
 			host.print("  data file not found: " .. (room.svcUnitPath or "?"))
-			host.print("  (is the database file in the right directory, unpacked?)")
 			return
 		end
 		S.flags = S.flags | room.svcFlag

@@ -66,6 +66,9 @@ target_include_directories(lua_static PUBLIC "${lua_SOURCE_DIR}")
 #set(CMAKE_C_CLANG_TIDY "clang-tidy;-checks=clang-diagnostic-*,-clang-diagnostic-unused-parameter")
 file(GLOB_RECURSE  SOURCE_FILES "${CMAKE_SOURCE_DIR}/lib/*.c")
 set(SRC_FILES main.c lua_rooms.c ${SOURCE_FILES})
+if(WIN32 AND NOT EMSCRIPTEN)
+  list(APPEND SRC_FILES vfd9000.rc)
+endif()
 include_directories(${CMAKE_SOURCE_DIR}/lib/)
 include_directories(${CMAKE_BINARY_DIR})
 add_executable(${APP_NAME} ${SRC_FILES})
@@ -119,5 +122,8 @@ else()
     # first-party game logic (spike)
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/game.lua"
-      "$<TARGET_FILE_DIR:${APP_NAME}>/game.lua")
+      "$<TARGET_FILE_DIR:${APP_NAME}>/game.lua"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/logo.png"
+      "$<TARGET_FILE_DIR:${APP_NAME}>/logo.png")
 endif()

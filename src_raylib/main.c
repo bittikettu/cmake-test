@@ -908,6 +908,12 @@ int main(void) {
 	const int winH = VIRT_H * SCALE + BEZEL * 2 + 260; // extra room for the on-screen keyboard
 	SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
 	InitWindow(winW, winH, "VFD-9000 TERMINAL");
+
+	Image icon = LoadImage("logo.png");
+	if (icon.data != NULL) {
+		SetWindowIcon(icon);
+		UnloadImage(icon);
+	}
 	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2 + 160);
 #if !defined(__EMSCRIPTEN__)
 	SetTargetFPS(60); // on the web the browser's rAF drives the frame rate
