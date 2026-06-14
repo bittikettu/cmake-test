@@ -605,8 +605,6 @@ static void UpdateDrawFrame(void) {
 					char buf[COLS + 1];
 					snprintf(buf, sizeof buf, "%s%s", e->label, e->worker ? " " : "");
 					term_putline(buf);
-					revealLine = lineCount; // boot draws in full; the dots are our reveal
-					revealCol = 0;
 					bootTimer = 0;
 					bootDots = 0;
 					bootPhase = e->worker ? BP_DOTS : BP_NEXT;
@@ -675,21 +673,22 @@ static void UpdateDrawFrame(void) {
 					}
 					inputLen = (int) strlen(input);
 				}
-				if (g_enter) {
-					if (shellMode && inputLen > 0) { // shell command history
-						if (histCount == HIST_MAX) {
-							memmove(history[0], history[1], sizeof(history[0]) * (HIST_MAX - 1));
-							histCount--;
-						}
-						snprintf(history[histCount++], INPUT_MAX + 1, "%s", input);
+			}
+
+			if (g_enter) {
+				if (shellMode && inputLen > 0) { // shell command history
+					if (histCount == HIST_MAX) {
+						memmove(history[0], history[1], sizeof(history[0]) * (HIST_MAX - 1));
+						histCount--;
 					}
-					char line[INPUT_MAX + 1];
-					snprintf(line, sizeof line, "%s", input);
-					input[0] = '\0';
-					inputLen = 0;
-					histPos = -1;
-					game_submit(line); // Lua echoes the prompt+line and processes it
+					snprintf(history[histCount++], INPUT_MAX + 1, "%s", input);
 				}
+				char line[INPUT_MAX + 1];
+				snprintf(line, sizeof line, "%s", input);
+				input[0] = '\0';
+				inputLen = 0;
+				histPos = -1;
+				game_submit(line); // Lua echoes the prompt+line and processes it
 			}
 		}
 
@@ -709,9 +708,12 @@ static void UpdateDrawFrame(void) {
 					if (revealCol < (int) strlen(termLines[revealLine])) {
 						revealCol++;
 					} else {
+						if (state == STATE_BOOT && (bootPhase == BP_DOTS || bootPhase == BP_OK) && revealLine == lineCount - 1) {
+							break;
+						}
 						revealLine++; // newline: stop here so the next line glows first
 						revealCol = 0;
-						break;
+						revealAcc -= 1.0f; // eat one tick for the newline
 					}
 				}
 			}

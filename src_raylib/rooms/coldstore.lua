@@ -44,8 +44,8 @@ local EASY_MEMO = [[
 MEMO (do not tape the code to the door this time)
 
 i 'encrypted' the code halves. military grade:
-    vault.enc is base64. decode:  base64 -d vault.enc
-the rest you figure out from there.
+    vault.enc is base64. the rest you
+	figure out from there.
                                         - J]]
 local EASY_SCHEMATIC = [[
 DOOR CONTROL - MODEL VFD-9000

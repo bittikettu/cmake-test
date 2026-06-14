@@ -522,7 +522,7 @@ function verbs.unlock(args)
 	else
 		host.print(string.format("time to escape: %02d:%02d", t // 60, t % 60))
 	end
-	host.print("press ESC to power off the terminal.")
+	host.print("press ENTER to return to cartridge selection, or ESC to power off.")
 	S.mode = "win"
 end
 
@@ -639,7 +639,8 @@ end
 function game.submit(line)
 	if S.mode == "select" then do_select(line)
 	elseif S.mode == "login" then do_login(line)
-	elseif S.mode == "shell" then run_shell(line) end
+	elseif S.mode == "shell" then run_shell(line)
+	elseif S.mode == "win" then game.start() end
 end
 
 function game.prompt()
