@@ -595,7 +595,6 @@ static void UpdateDrawFrame(void) {
 		g_kbDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
 #endif
 
-		if (IsKeyPressed(KEY_LEFT_ALT)) g_fnToggled = !g_fnToggled;
 		bool fnMode = g_fnToggled;
 
 		//------------------------------------------------------------------ gather input (physical + on-screen)
@@ -603,15 +602,15 @@ static void UpdateDrawFrame(void) {
 		g_enter = g_back = g_up = g_down = g_left = g_right = g_pgup = g_pgdn = false;
 		int gch;
 		while ((gch = GetCharPressed()) > 0)
-			if (!fnMode && gch >= 32 && gch < 127 && g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = gch;
+			if (gch >= 32 && gch < 127 && g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = gch;
 		if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) g_back = true;
 		if (IsKeyPressed(KEY_ENTER) && !altDown) g_enter = true;
-		if (IsKeyPressed(KEY_UP) || (fnMode && (IsKeyPressed(KEY_W) || IsKeyPressedRepeat(KEY_W)))) g_up = true;
-		if (IsKeyPressed(KEY_DOWN) || (fnMode && (IsKeyPressed(KEY_S) || IsKeyPressedRepeat(KEY_S)))) g_down = true;
-		if (IsKeyPressed(KEY_LEFT) || (fnMode && (IsKeyPressed(KEY_A) || IsKeyPressedRepeat(KEY_A)))) g_left = true;
-		if (IsKeyPressed(KEY_RIGHT) || (fnMode && (IsKeyPressed(KEY_D) || IsKeyPressedRepeat(KEY_D)))) g_right = true;
-		if (IsKeyPressed(KEY_PAGE_UP) || (fnMode && (IsKeyPressed(KEY_Q) || IsKeyPressedRepeat(KEY_Q)))) g_pgup = true;
-		if (IsKeyPressed(KEY_PAGE_DOWN) || (fnMode && (IsKeyPressed(KEY_E) || IsKeyPressedRepeat(KEY_E)))) g_pgdn = true;
+		if (IsKeyPressed(KEY_UP)) g_up = true;
+		if (IsKeyPressed(KEY_DOWN)) g_down = true;
+		if (IsKeyPressed(KEY_LEFT)) g_left = true;
+		if (IsKeyPressed(KEY_RIGHT)) g_right = true;
+		if (IsKeyPressed(KEY_PAGE_UP)) g_pgup = true;
+		if (IsKeyPressed(KEY_PAGE_DOWN)) g_pgdn = true;
 		// a mechanical click on every physical key-down (its own queue, separate from chars)
 		while (GetKeyPressed() > 0) play_keysound();
 
