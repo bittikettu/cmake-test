@@ -14,6 +14,20 @@
 #include "engine.h"
 #include "room.h"
 
+// Buffer sizes / limits for the command interpreter. (PATH_BUF, PROMPT_BUF,
+// HOME_DIR, etc. are shared with the engine and come from engine.h.)
+#define DECODE_BUF 1024	   // base64 -d / rot13 decode output
+#define LINE_BUF 256	   // one line of file text (grep)
+#define QUERY_BUF 256	   // an assembled sql query
+#define NAME_BUF 64		   // a small token: module name, ls entry, sql needle
+#define TABLE_NAME_BUF 40  // a sql table name
+#define TABLE_DESC_BUF 120 // a sql table description
+#define HDR_LINE_BUF 200   // a sql catalog header line being parsed
+#define MAX_ARGS 8		   // argv slots in run_command
+#define LS_COL_W 16		   // ls column width (one filename cell)
+#define ALARM_TRIES 3	   // wrong unlock attempts before the bluff "alarm"
+#define SECS_PER_HOUR 3600
+
 static void cmd_help(void) {
 	if (hardMode) {
 		term_print("help: not installed on this system. you chose l33t.");
@@ -37,7 +51,7 @@ static void cmd_ls(int argc, char **argv) {
 		else
 			target = argv[i];
 	}
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(target ? target : ".", path, sizeof path);
 	FsNode *dir = find_node(path);
 	if (!dir) {
@@ -51,16 +65,15 @@ static void cmd_ls(int argc, char **argv) {
 	char row[COLS + 1] = "";
 	int used = 0, shown = 0;
 	int total = fs_total();
-	const int colw = 16;
 	for (int i = 0; i < total; i++) {
 		FsNode *n = fs_at(i);
 		if (!n->present || !in_dir(n, path)) continue;
 		if (n->hidden && !all) continue;
-		char entry[64];
+		char entry[NAME_BUF];
 		snprintf(entry, sizeof entry, "%s%s", base_name(n), n->isDir ? "/" : "");
 		// a name claims whole columns and always keeps a trailing gap, so long
 		// names (e.g. door_schematic.txt) print in full instead of being clipped
-		int width = ((int) strlen(entry) / colw + 1) * colw;
+		int width = ((int) strlen(entry) / LS_COL_W + 1) * LS_COL_W;
 		if (used > 0 && used + width > COLS) {
 			term_putline(row);
 			row[0] = '\0';
@@ -74,7 +87,7 @@ static void cmd_ls(int argc, char **argv) {
 }
 
 static void cmd_cd(int argc, char **argv) {
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(argc > 1 ? argv[1] : "~", path, sizeof path);
 	FsNode *n = find_node(path);
 	if (!n) {
@@ -93,7 +106,7 @@ static void cmd_cat(int argc, char **argv) {
 		term_print("usage: cat FILE");
 		return;
 	}
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(argv[1], path, sizeof path);
 	FsNode *n = find_node(path);
 	if (!n) {
@@ -112,7 +125,7 @@ static void cmd_grep(int argc, char **argv) {
 		term_print("usage: grep PATTERN FILE");
 		return;
 	}
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(argv[2], path, sizeof path);
 	FsNode *n = find_node(path);
 	if (!n || n->isDir || !n->content) {
@@ -124,7 +137,7 @@ static void cmd_grep(int argc, char **argv) {
 	while (*p) {
 		const char *end = strchr(p, '\n');
 		size_t len = end ? (size_t) (end - p) : strlen(p);
-		char line[256];
+		char line[LINE_BUF];
 		if (len >= sizeof line) len = sizeof line - 1;
 		memcpy(line, p, len);
 		line[len] = '\0';
@@ -153,7 +166,7 @@ static void cmd_tar(int argc, char **argv) {
 		term_print("usage: tar -xf FILE");
 		return;
 	}
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(file, path, sizeof path);
 	FsNode *n = find_node(path);
 	if (!n) {
@@ -173,7 +186,7 @@ static void cmd_tar(int argc, char **argv) {
 			// tar lists members without a leading slash; trim the home prefix if
 			// present, otherwise just the leading '/', so any extract dir is tidy
 			const char *rel = activeRoom->fs[i].path;
-			if (strncmp(rel, "/home/guest/", 12) == 0) rel += 12;
+			if (strncmp(rel, HOME_DIR "/", HOME_DIR_LEN + 1) == 0) rel += HOME_DIR_LEN + 1;
 			else if (rel[0] == '/') rel += 1;
 			term_printf("x %s%s", rel, activeRoom->fs[i].isDir ? "/" : "");
 			any = true;
@@ -196,14 +209,14 @@ static void cmd_base64(int argc, char **argv) {
 		term_print("usage: base64 -d FILE   (decode)");
 		return;
 	}
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(argv[2], path, sizeof path);
 	FsNode *n = find_node(path);
 	if (!n || n->isDir || !n->content) {
 		term_printf("base64: %s: cannot read", argv[2]);
 		return;
 	}
-	char out[1024];
+	char out[DECODE_BUF];
 	int bits = 0, acc = 0, len = 0;
 	for (const char *p = n->content; *p && len < (int) sizeof out - 1; p++) {
 		int v = b64val(*p);
@@ -228,14 +241,14 @@ static void cmd_rot13(int argc, char **argv) {
 		term_print("usage: rot13 FILE");
 		return;
 	}
-	char path[256];
+	char path[PATH_BUF];
 	resolve_path(argv[1], path, sizeof path);
 	FsNode *n = find_node(path);
 	if (!n || n->isDir || !n->content) {
 		term_printf("rot13: %s: cannot read", argv[1]);
 		return;
 	}
-	char out[1024];
+	char out[DECODE_BUF];
 	rot13_buf(n->content, out, sizeof out);
 	term_print(out);
 }
@@ -246,7 +259,7 @@ static void cmd_modprobe(int argc, char **argv) {
 		return;
 	}
 	// accept "name" or "name.ko"
-	char name[64];
+	char name[NAME_BUF];
 	snprintf(name, sizeof name, "%s", argv[1]);
 	size_t nl = strlen(name);
 	if (nl > 3 && strcmp(name + nl - 3, ".ko") == 0) name[nl - 3] = '\0';
@@ -282,7 +295,7 @@ static void cmd_unlock(int argc, char **argv) {
 	if (!codeOk) {
 		wrongTries++;
 		term_print("doorctl: ACCESS DENIED");
-		if (wrongTries == 3) term_print("doorctl: ALARM TRIGGERED ... just kidding. keep trying.");
+		if (wrongTries == ALARM_TRIES) term_print("doorctl: ALARM TRIGGERED ... just kidding. keep trying.");
 		return;
 	}
 	term_print("doorctl: CODE ACCEPTED");
@@ -294,8 +307,8 @@ static void cmd_unlock(int argc, char **argv) {
 	play_door_open(); // bolt retracts, door swings open
 	if (activeRoom->winArt) term_print(activeRoom->winArt);
 	int t = (int) (GetTime() - loginTime);
-	if (t >= 3600)
-		term_printf("time to escape: %d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60);
+	if (t >= SECS_PER_HOUR)
+		term_printf("time to escape: %d:%02d:%02d", t / SECS_PER_HOUR, (t / 60) % 60, t % 60);
 	else
 		term_printf("time to escape: %02d:%02d", t / 60, t % 60);
 	term_print("press ESC to power off the terminal.");
@@ -341,7 +354,7 @@ static void cmd_mv(int argc, char **argv) {
 		term_print("usage: mv SRC DST");
 		return;
 	}
-	char src[256], dst[256];
+	char src[PATH_BUF], dst[PATH_BUF];
 	resolve_path(argv[1], src, sizeof src);
 	resolve_path(argv[2], dst, sizeof dst);
 	if (!find_node(src)) {
@@ -350,7 +363,7 @@ static void cmd_mv(int argc, char **argv) {
 	}
 	if (activeRoom->mvSrc && activeRoom->mvDst && strcmp(src, activeRoom->mvSrc) == 0) {
 		// the directory part of mvDst, so `mv x /dir/` and `mv x /dir/file` both work
-		char dstDir[256];
+		char dstDir[PATH_BUF];
 		snprintf(dstDir, sizeof dstDir, "%s", activeRoom->mvDst);
 		char *slash = strrchr(dstDir, '/');
 		if (slash && slash != dstDir) *slash = '\0';
@@ -417,20 +430,23 @@ static void cmd_service(int argc, char **argv) {
 // header, rule, rows) until the next header or end. build_secrets fills it in,
 // so the table set (incl. decoys) and which one hides the code are pure data.
 #define SQL_HDR ":: "
+#define SQL_HDR_LEN ((int) sizeof(SQL_HDR) - 1) // strlen(":: ") == 3
+#define SQL_SEP " | "						   // separates a table's name from its desc
+#define SQL_SEP_LEN ((int) sizeof(SQL_SEP) - 1)
 
 // Extract a header line's name/desc into caller buffers. Returns false if `line`
 // is not a `:: name | desc` header.
 static bool sql_parse_header(const char *line, size_t len, char *name, int nsz, char *desc, int dsz) {
-	if (len < 3 || strncmp(line, SQL_HDR, 3) != 0) return false;
-	char buf[200];
+	if ((int) len < SQL_HDR_LEN || strncmp(line, SQL_HDR, SQL_HDR_LEN) != 0) return false;
+	char buf[HDR_LINE_BUF];
 	if (len >= sizeof buf) len = sizeof buf - 1;
 	memcpy(buf, line, len);
 	buf[len] = '\0';
-	char *n = buf + 3;
-	char *bar = strstr(n, " | ");
+	char *n = buf + SQL_HDR_LEN;
+	char *bar = strstr(n, SQL_SEP);
 	if (bar) *bar = '\0';
 	snprintf(name, nsz, "%s", n);
-	snprintf(desc, dsz, "%s", bar ? bar + 3 : "");
+	snprintf(desc, dsz, "%s", bar ? bar + SQL_SEP_LEN : "");
 	return true;
 }
 
@@ -443,7 +459,7 @@ static void sql_list_tables(const char *cat) {
 	for (const char *p = cat; *p;) {
 		const char *nl = strchr(p, '\n');
 		size_t l = nl ? (size_t) (nl - p) : strlen(p);
-		char name[40], desc[120];
+		char name[TABLE_NAME_BUF], desc[TABLE_DESC_BUF];
 		if (sql_parse_header(p, l, name, sizeof name, desc, sizeof desc)) {
 			term_printf(" %-9s | %s", name, desc);
 			n++;
@@ -460,7 +476,7 @@ static const char *sql_find_table(const char *cat, const char *name, const char 
 	for (const char *p = cat; *p;) {
 		const char *nl = strchr(p, '\n');
 		size_t l = nl ? (size_t) (nl - p) : strlen(p);
-		char tname[40], tdesc[120];
+		char tname[TABLE_NAME_BUF], tdesc[TABLE_DESC_BUF];
 		bool hdr = sql_parse_header(p, l, tname, sizeof tname, tdesc, sizeof tdesc);
 		if (hdr && ci_eq(tname, name)) {
 			const char *body = nl ? nl + 1 : p + l;
@@ -468,7 +484,7 @@ static const char *sql_find_table(const char *cat, const char *name, const char 
 			while (*q) { // walk to the next header line
 				const char *e = strchr(q, '\n');
 				size_t ql = e ? (size_t) (e - q) : strlen(q);
-				if (ql >= 3 && strncmp(q, SQL_HDR, 3) == 0) break;
+				if ((int) ql >= SQL_HDR_LEN && strncmp(q, SQL_HDR, SQL_HDR_LEN) == 0) break;
 				if (!e) {
 					q += ql;
 					break;
@@ -503,7 +519,7 @@ static void cmd_sql(int argc, char **argv) {
 		term_print("sql: catalog unavailable");
 		return;
 	}
-	char q[256] = "";
+	char q[QUERY_BUF] = "";
 	int len = 0;
 	for (int i = 1; i < argc && len < (int) sizeof q - 1; i++)
 		len += snprintf(q + len, sizeof q - len, "%s%s", i > 1 ? " " : "", argv[i]);
@@ -525,7 +541,7 @@ static void cmd_sql(int argc, char **argv) {
 		return;
 	}
 	// table name after FROM
-	char tname[40] = "";
+	char tname[TABLE_NAME_BUF] = "";
 	for (const char *p = q; *p; p++)
 		if ((p == q || p[-1] == ' ') && ci_prefix(p, "from ")) {
 			const char *s = p + 5;
@@ -547,7 +563,7 @@ static void cmd_sql(int argc, char **argv) {
 	}
 	// optional `WHERE <needle>`: text after the last '=' or after "where ",
 	// stripped of quotes/spaces, used as a case-insensitive row filter.
-	char needle[64] = "";
+	char needle[NAME_BUF] = "";
 	const char *w = NULL;
 	for (const char *p = q; *p; p++)
 		if ((p == q || p[-1] == ' ') && ci_prefix(p, "where ")) {
@@ -586,14 +602,14 @@ static void cmd_sql(int argc, char **argv) {
 }
 
 void run_command(char *cmdline) {
-	char echo[COLS + 1], prompt[64];
+	char echo[COLS + 1], prompt[PROMPT_BUF];
 	prompt_str(prompt, sizeof prompt);
 	snprintf(echo, sizeof echo, "%s%s", prompt, cmdline);
 	term_putline(echo);
 
-	char *argv[8];
+	char *argv[MAX_ARGS];
 	int argc = 0;
-	for (char *tok = strtok(cmdline, " \t"); tok && argc < 8; tok = strtok(NULL, " \t")) argv[argc++] = tok;
+	for (char *tok = strtok(cmdline, " \t"); tok && argc < MAX_ARGS; tok = strtok(NULL, " \t")) argv[argc++] = tok;
 	if (argc == 0) return;
 
 	if (strcmp(argv[0], "help") == 0) cmd_help();

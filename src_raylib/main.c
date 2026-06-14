@@ -48,12 +48,23 @@
 #define INPUT_MAX 48
 #define HIST_MAX 16
 
+// Engine-local buffer sizes / limits (shared ones like PATH_BUF, HOME_DIR,
+// PROMPT_BUF, CWD_BUF live in engine.h).
+#define TERM_FMT_BUF 1024	// term_printf format scratch
+#define OS_PATH_BUF 1024	// a real on-disk path (asset loading)
+#define PATH_PARTS 32		// max components in a resolved path
+#define BIN_PATH_BUF 40		// a /usr/bin/<name> node path
+#define BIN_STUB_BUF 72		// a /usr/bin binary's stub "content"
+#define MAX_FRAME_CHARS 64	// typed characters buffered per frame
+#define DOOR_CODE_MIN 1000	// 4-digit door code, no leading zero
+#define DOOR_CODE_MAX 9999
+
 //----------------------------------------------------------------------------
 // Active session state (engine-owned; the room supplies the content)
 //----------------------------------------------------------------------------
 Room *activeRoom = NULL;	  // selected cartridge
 unsigned roomFlags = 0;	  // gate bits set during play
-char doorCode[5] = "0000"; // rolled fresh on every room load
+char doorCode[DOORCODE_BUF] = "0000"; // rolled fresh on every room load
 
 // Door foley: the bolt slams shut when a cartridge is loaded, and the door
 // swings open on a win. Loaded in main(), played from load_room/cmd_unlock.
@@ -114,7 +125,7 @@ void term_print(const char *s) {
 }
 
 void term_printf(const char *fmt, ...) {
-	char buf[1024];
+	char buf[TERM_FMT_BUF];
 	va_list ap;
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof buf, fmt, ap);
@@ -141,22 +152,22 @@ void play_door_open(void) {
 //----------------------------------------------------------------------------
 // Filesystem access (over the active room's node table)
 //----------------------------------------------------------------------------
-char cwd[128] = "/home/guest";
+char cwd[CWD_BUF] = HOME_DIR;
 
 void resolve_path(const char *arg, char *out, int outsz) {
-	char tmp[256];
+	char tmp[PATH_BUF];
 	if (arg[0] == '/')
 		snprintf(tmp, sizeof tmp, "%s", arg);
 	else if (strcmp(arg, "~") == 0 || strncmp(arg, "~/", 2) == 0)
-		snprintf(tmp, sizeof tmp, "/home/guest%s", arg + 1);
+		snprintf(tmp, sizeof tmp, HOME_DIR "%s", arg + 1);
 	else
 		snprintf(tmp, sizeof tmp, "%s/%s", cwd, arg);
 
-	char buf[256];
+	char buf[PATH_BUF];
 	snprintf(buf, sizeof buf, "%s", tmp);
-	char *parts[32];
+	char *parts[PATH_PARTS];
 	int n = 0;
-	for (char *tok = strtok(buf, "/"); tok && n < 32; tok = strtok(NULL, "/")) {
+	for (char *tok = strtok(buf, "/"); tok && n < PATH_PARTS; tok = strtok(NULL, "/")) {
 		if (strcmp(tok, ".") == 0) continue;
 		if (strcmp(tok, "..") == 0) {
 			if (n > 0) n--;
@@ -213,8 +224,8 @@ const int g_builtinCount = BUILTIN_COUNT; // exposed to the shell (engine.h)
 // and built once at startup from g_builtins, so `ls /usr/bin` reveals the
 // installed toolset. Rooms must not define their own /usr/bin.
 static FsNode binFs[BUILTIN_COUNT + 2];
-static char binPath[BUILTIN_COUNT][40];
-static char binStub[BUILTIN_COUNT][72];
+static char binPath[BUILTIN_COUNT][BIN_PATH_BUF];
+static char binStub[BUILTIN_COUNT][BIN_STUB_BUF];
 static int binCount;
 
 static void init_binfs(void) {
@@ -294,7 +305,7 @@ static float bootTimer = 0;
 static int bootIndex = 0;
 int wrongTries = 0;
 bool hardMode = false;
-char username[16] = "guest";
+char username[USERNAME_BUF] = "guest";
 double loginTime = 0; // escape timer starts at login
 
 // A boot self-test line. A "worker" line drops its label, then ticks dots out
@@ -327,7 +338,7 @@ static int bootPhase = BP_WAIT;
 static int bootDots = 0;
 
 void prompt_str(char *out, int outsz) {
-	char shown[128];
+	char shown[CWD_BUF];
 	if (state == STATE_SELECT) {
 		snprintf(out, outsz, "load cartridge: ");
 		return;
@@ -336,8 +347,8 @@ void prompt_str(char *out, int outsz) {
 		snprintf(out, outsz, "vfd-9000 login: ");
 		return;
 	}
-	if (strncmp(cwd, "/home/guest", 11) == 0)
-		snprintf(shown, sizeof shown, "~%s", cwd + 11);
+	if (strncmp(cwd, HOME_DIR, HOME_DIR_LEN) == 0)
+		snprintf(shown, sizeof shown, "~%s", cwd + HOME_DIR_LEN);
 	else
 		snprintf(shown, sizeof shown, "%s", cwd);
 	snprintf(out, outsz, "%s@vfd:%s$ ", username, shown);
@@ -410,9 +421,9 @@ static void load_room(Room *r) {
 	activeRoom = r;
 	roomFlags = 0;
 	wrongTries = 0;
-	snprintf(cwd, sizeof cwd, "/home/guest");
+	snprintf(cwd, sizeof cwd, HOME_DIR);
 	// new door code every load; 1000+ avoids leading-zero confusion
-	snprintf(doorCode, sizeof doorCode, "%d", GetRandomValue(1000, 9999));
+	snprintf(doorCode, sizeof doorCode, "%d", GetRandomValue(DOOR_CODE_MIN, DOOR_CODE_MAX));
 	if (r->gateLogPath) set_content(r, r->gateLogPath, r->gateLogBase);
 	term_print(r->intro);
 	term_print("");
@@ -639,7 +650,7 @@ static float kbUnits; // width of the widest row, in key units
 
 // Synthesized input for the current frame, merged from the physical keyboard
 // and the on-screen keyboard so both drive one code path.
-static int g_chars[64];
+static int g_chars[MAX_FRAME_CHARS];
 static int g_charN;
 static bool g_enter, g_back, g_up, g_down;
 static int g_kbHover = -1; // on-screen key under the pointer, -1 = none
@@ -664,7 +675,7 @@ static void init_keyboard(void) {
 #if SHOW_KEYBOARD
 static void kb_activate(const Key *k) {
 	if (k->ch) {
-		if (g_charN < 64) g_chars[g_charN++] = k->ch;
+		if (g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = k->ch;
 	} else if (k->action == 1) {
 		g_enter = true;
 	} else if (k->action == 2) {
@@ -796,7 +807,7 @@ static void UpdateDrawFrame(void) {
 		g_enter = g_back = g_up = g_down = false;
 		int gch;
 		while ((gch = GetCharPressed()) > 0)
-			if (gch >= 32 && gch < 127 && g_charN < 64) g_chars[g_charN++] = gch;
+			if (gch >= 32 && gch < 127 && g_charN < MAX_FRAME_CHARS) g_chars[g_charN++] = gch;
 		if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) g_back = true;
 		if (IsKeyPressed(KEY_ENTER) && !altDown) g_enter = true;
 		if (IsKeyPressed(KEY_UP)) g_up = true;
@@ -928,7 +939,7 @@ static void UpdateDrawFrame(void) {
 					histPos = -1;
 					run_command(cmdline);
 				} else {
-					char prompt[64];
+					char prompt[PROMPT_BUF];
 					prompt_str(prompt, sizeof prompt);
 					term_putline(prompt);
 				}
@@ -1021,7 +1032,7 @@ static void UpdateDrawFrame(void) {
 		// input line
 		int inputY = PAD_Y + VISROWS * CELL_H;
 		if ((state == STATE_SHELL || state == STATE_LOGIN || state == STATE_SELECT) && scrollOff == 0 && !printing) {
-			char prompt[64], lineBuf[COLS + 1];
+			char prompt[PROMPT_BUF], lineBuf[COLS + 1];
 			prompt_str(prompt, sizeof prompt);
 			snprintf(lineBuf, sizeof lineBuf, "%s%s", prompt, input);
 			draw_mono(lineBuf, PAD_X, inputY, PHOSPHOR);
@@ -1127,10 +1138,10 @@ int main(void) {
 	runMusic = LoadMusicStream("running.mp3");
 #else
 	// the mp3s are staged next to the executable by CMake; resolve from there
-	char bootPath[1024];
+	char bootPath[OS_PATH_BUF];
 	snprintf(bootPath, sizeof bootPath, "%sboot.mp3", GetApplicationDirectory());
 	bootMusic = LoadMusicStream(bootPath);
-	char runPath[1024];
+	char runPath[OS_PATH_BUF];
 	snprintf(runPath, sizeof runPath, "%srunning.mp3", GetApplicationDirectory());
 	runMusic = LoadMusicStream(runPath);
 #endif
@@ -1141,7 +1152,7 @@ int main(void) {
 
 	// door foley: staged next to the exe (native) / preloaded at MEMFS root (web)
 	{
-		char p[1024];
+		char p[OS_PATH_BUF];
 #if defined(__EMSCRIPTEN__)
 		const char *dir = "";
 #else
@@ -1156,7 +1167,7 @@ int main(void) {
 	// mechanical key-click bank (staged next to the exe / preloaded on web)
 	keySfxN = 0;
 	for (int i = 1; i <= KEY_SFX_COUNT; i++) {
-		char p[1024];
+		char p[OS_PATH_BUF];
 #if defined(__EMSCRIPTEN__)
 		snprintf(p, sizeof p, "separated_keypresses/keypress_%d.mp3", i);
 #else

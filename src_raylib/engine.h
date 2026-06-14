@@ -11,6 +11,15 @@
 
 #define COLS 64 // terminal width in cells (shared by the engine and the shell)
 
+// Shared buffer sizes / paths (used by both the engine and the shell).
+#define PATH_BUF 256			   // a resolved virtual-filesystem path
+#define CWD_BUF 128				   // current working directory
+#define PROMPT_BUF 64			   // a rendered shell prompt ("user@vfd:dir$ ")
+#define DOORCODE_BUF 5			   // 4 digits + NUL
+#define USERNAME_BUF 16			   // login name
+#define HOME_DIR "/home/guest"	   // the player's home directory
+#define HOME_DIR_LEN ((int) sizeof(HOME_DIR) - 1) // strlen("/home/guest") == 11
+
 // Game-state machine. The shell only sets STATE_WIN (on a successful unlock).
 typedef enum { STATE_SPLASH, STATE_BOOT, STATE_SELECT, STATE_LOGIN, STATE_SHELL, STATE_WIN } GameState;
 
@@ -26,13 +35,13 @@ extern const int g_builtinCount;
 // Active session state (defined in main.c; read/written by the shell).
 extern Room *activeRoom;
 extern unsigned roomFlags;
-extern char doorCode[5];
+extern char doorCode[DOORCODE_BUF];
 extern int wrongTries;
 extern bool hardMode;
-extern char username[16];
+extern char username[USERNAME_BUF];
 extern double loginTime;
 extern GameState state;
-extern char cwd[128];
+extern char cwd[CWD_BUF];
 
 // Terminal output.
 void term_putline(const char *s);
