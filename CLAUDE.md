@@ -83,17 +83,21 @@ without touching (or recompiling) the engine.
   a Lua-defined room produces an identical C `Room`.
 
 - **`main.c`** — the engine, room-agnostic. Owns: the terminal scrollback +
-  teletype reveal, the CRT/VFD rendering, the command interpreter
-  (`run_command` and the `cmd_*` functions), path resolution, and the
-  game-state machine `BOOT → SELECT → LOGIN → SHELL → WIN`. All filesystem
-  access goes through the **active room** (`activeRoom->fs`), not a global
-  table. Calls `rooms_init()` at startup and `rooms_shutdown()` at exit.
-  The shell verbs (`ls cd cat grep mv tar base64 rot13 modprobe lsmod dmesg
-  service sql unlock clear …`) are the `cmd_*` functions dispatched by
-  `run_command`. The `g_builtins[]` table is the **single source of truth**
-  for both `help` and the synthesized `/usr/bin` directory (so `ls /usr/bin`
-  lists the installed toolset) — add any new verb there or it won't be
-  discoverable.
+  teletype reveal, the CRT/VFD rendering, the virtual filesystem (`find_node`,
+  `resolve_path`, the `/usr/bin` synthesis), and the game-state machine
+  `BOOT → SELECT → LOGIN → SHELL → WIN`. All filesystem access goes through the
+  **active room** (`activeRoom->fs`), not a global table. Calls `rooms_init()`
+  at startup and `rooms_shutdown()` at exit.
+
+- **`commands.c` / `commands.h`** — the shell. Holds `run_command` (the only
+  export, called by main.c's input loop) and every `cmd_*` verb (`ls cd cat
+  grep mv tar base64 rot13 modprobe lsmod dmesg service sql unlock clear …`).
+  It reaches the engine through **`engine.h`** (an internal header exposing
+  `term_*`, the filesystem helpers, session globals, etc. — *not* the room
+  contract). The `g_builtins[]` table is the **single source of truth** for
+  both `help` and the synthesized `/usr/bin` directory (so `ls /usr/bin` lists
+  the installed toolset) — add any new verb there, dispatch it in
+  `run_command`, and write its `cmd_*`, or it won't be discoverable.
 
 - **`lua_rooms.c` / `lua_rooms.h`** — the Lua bridge. Owns one sandboxed
   `lua_State` (only base/table/string/math opened; `dofile`/`loadfile`
@@ -161,10 +165,12 @@ not code**:
    `fs` table, `intro`, `winArt`, gate fields, and the two functions. Give it a
    unique `id`/`title`. File content is a Lua string (use `[[ ... ]]`).
 2. It appears in the boot menu automatically — no engine edits needed unless
-   the room needs a brand-new shell *verb*: add a `cmd_*` in `main.c`, dispatch
-   it from `run_command`, and register it in `g_builtins[]` (so `help` and
-   `/usr/bin` show it). Prefer making the verb generic + driven by `Room`
-   fields (as `service`/`mv`/`sql` are) over hard-coding room specifics.
+   the room needs a brand-new shell *verb*: add a `cmd_*` in `commands.c`,
+   dispatch it from `run_command`, and register it in `g_builtins[]` (in
+   `main.c`, so `help` and `/usr/bin` show it). If the verb needs an engine
+   facility the shell can't yet reach, expose it in `engine.h`. Prefer making
+   the verb generic + driven by `Room` fields (as `service`/`mv`/`sql` are)
+   over hard-coding room specifics.
 3. Native: drop the file in the `rooms/` folder next to the exe (no rebuild
    needed). For the bundled/web build, add it under `src_raylib/rooms/` so the
    POST_BUILD copy and the emscripten `--preload-file rooms@rooms` pick it up.
