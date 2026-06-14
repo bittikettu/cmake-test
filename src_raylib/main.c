@@ -6,6 +6,8 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <math.h>
 #include <raylib.h>
+#include <raymath.h> // Clamp + vector helpers for the 3D orbit camera
+#include <rlgl.h>	 // rlBegin/rlVertex etc. for the procedural 3D screen quad
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -346,11 +348,130 @@ static const char *CRT_FS =
 	"}\n";
 #endif
 
+// Case lighting: one directional light + ambient (Lambert with a faint plastic
+// specular). Standard raylib attribute/uniform names (vertexPosition/Normal,
+// mvp/matModel/matNormal/colDiffuse) so DrawModel binds them automatically; the
+// light parameters are the only custom uniforms. GLSL 330 desktop / GLSL ES 100
+// web, mirroring CRT_FS.
+#if defined(__EMSCRIPTEN__)
+static const char *LIGHT_VS =
+	"#version 100\n"
+	"precision highp float;\n"
+	"attribute vec3 vertexPosition;\n"
+	"attribute vec3 vertexNormal;\n"
+	"uniform mat4 mvp;\n"
+	"uniform mat4 matModel;\n"
+	"uniform mat4 matNormal;\n"
+	"varying vec3 fragPosition;\n"
+	"varying vec3 fragNormal;\n"
+	"void main(){\n"
+	"    fragPosition = vec3(matModel*vec4(vertexPosition,1.0));\n"
+	"    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal,1.0)));\n"
+	"    gl_Position = mvp*vec4(vertexPosition,1.0);\n"
+	"}\n";
+static const char *LIGHT_FS =
+	"#version 100\n"
+	"precision highp float;\n"
+	"varying vec3 fragPosition;\n"
+	"varying vec3 fragNormal;\n"
+	"uniform vec4 colDiffuse;\n"
+	"uniform vec3 lightDir;\n"
+	"uniform vec4 lightColor;\n"
+	"uniform vec4 ambient;\n"
+	"uniform vec3 viewPos;\n"
+	"uniform vec3 glowPos;\n"	// screen position: a point light that glows the dark room
+	"uniform vec4 glowColor;\n" // rgb phosphor tint, a = intensity
+	"void main(){\n"
+	"    vec3 n = normalize(fragNormal);\n"
+	"    vec3 l = normalize(-lightDir);\n"
+	"    float diff = max(dot(n,l),0.0);\n"
+	"    vec3 v = normalize(viewPos - fragPosition);\n"
+	"    vec3 h = normalize(l+v);\n"
+	"    float spec = pow(max(dot(n,h),0.0),32.0)*0.12;\n"
+	"    vec3 col = colDiffuse.rgb*(ambient.rgb + diff*lightColor.rgb) + spec*lightColor.rgb;\n"
+	"    vec3 gd = glowPos - fragPosition;\n" // monitor glow as a point light
+	"    float gdist = length(gd);\n"
+	"    float gatt = 1.0/(1.0 + 0.10*gdist + 0.03*gdist*gdist);\n"
+	"    float gdiff = max(dot(n, gd/max(gdist,0.001)), 0.0)*gatt;\n"
+	"    col += colDiffuse.rgb*gdiff*glowColor.rgb*glowColor.a;\n"
+	"    gl_FragColor = vec4(col, colDiffuse.a);\n"
+	"}\n";
+#else
+static const char *LIGHT_VS =
+	"#version 330\n"
+	"in vec3 vertexPosition;\n"
+	"in vec3 vertexNormal;\n"
+	"uniform mat4 mvp;\n"
+	"uniform mat4 matModel;\n"
+	"uniform mat4 matNormal;\n"
+	"out vec3 fragPosition;\n"
+	"out vec3 fragNormal;\n"
+	"void main(){\n"
+	"    fragPosition = vec3(matModel*vec4(vertexPosition,1.0));\n"
+	"    fragNormal = normalize(vec3(matNormal*vec4(vertexNormal,1.0)));\n"
+	"    gl_Position = mvp*vec4(vertexPosition,1.0);\n"
+	"}\n";
+static const char *LIGHT_FS =
+	"#version 330\n"
+	"in vec3 fragPosition;\n"
+	"in vec3 fragNormal;\n"
+	"out vec4 finalColor;\n"
+	"uniform vec4 colDiffuse;\n"
+	"uniform vec3 lightDir;\n"
+	"uniform vec4 lightColor;\n"
+	"uniform vec4 ambient;\n"
+	"uniform vec3 viewPos;\n"
+	"uniform vec3 glowPos;\n"	// screen position: a point light that glows the dark room
+	"uniform vec4 glowColor;\n" // rgb phosphor tint, a = intensity
+	"void main(){\n"
+	"    vec3 n = normalize(fragNormal);\n"
+	"    vec3 l = normalize(-lightDir);\n"
+	"    float diff = max(dot(n,l),0.0);\n"
+	"    vec3 v = normalize(viewPos - fragPosition);\n"
+	"    vec3 h = normalize(l+v);\n"
+	"    float spec = pow(max(dot(n,h),0.0),32.0)*0.12;\n"
+	"    vec3 col = colDiffuse.rgb*(ambient.rgb + diff*lightColor.rgb) + spec*lightColor.rgb;\n"
+	"    vec3 gd = glowPos - fragPosition;\n" // monitor glow as a point light
+	"    float gdist = length(gd);\n"
+	"    float gatt = 1.0/(1.0 + 0.10*gdist + 0.03*gdist*gdist);\n"
+	"    float gdiff = max(dot(n, gd/max(gdist,0.001)), 0.0)*gatt;\n"
+	"    col += colDiffuse.rgb*gdiff*glowColor.rgb*glowColor.a;\n"
+	"    finalColor = vec4(col, colDiffuse.a);\n"
+	"}\n";
+#endif
+
 // ---- frame-persistent state (file scope so the web per-frame callback can
 // reach it; the browser owns the loop and calls UpdateDrawFrame once a frame) ----
 static RenderTexture2D virt;
+static RenderTexture2D screenTex; // flat CRT-shaded result, mapped onto the 3D screen face
+static Camera3D cam;			  // viewpoint for the procedural 3D monitor
+static float orbitAngle = 0.15f;  // 3D orbit camera (right-drag to rotate, wheel to zoom)
+static float orbitDist = 8.5f;
+static float orbitHeight = 5.4f;
+static bool camFocused = false;	   // double-click the glass to zoom head-on (2D-like sizing)
+static float focusT = 0.0f;		   // 0 = orbit pose, 1 = focused on the screen (animated)
+static double lastClickTime = -1.0; // for double-click detection
+static Vector2 lastClickPos = {0, 0};
+// World position + half-size of the monitor glass (matches draw_vintage_pc).
+#define SCREEN_CX 0.0f
+#define SCREEN_CY 2.85f
+#define SCREEN_CZ 1.86f
+#define SCREEN_HW 1.65f // half of the 3.3 glass width
+#define SCREEN_HH 1.225f // half of the 2.45 glass height
+// true on touch/mobile browsers -> force the lightweight 2D path; desktop
+// (native, or a desktop web browser) gets the full 3D scene. Set once at startup.
+static bool g_isMobile = false;
+#if defined(__EMSCRIPTEN__)
+static bool render3D = false; // web: decided in main() from g_isMobile (desktop -> 3D)
+#else
+static bool render3D = true; // native: F2 toggles between the 3D monitor and the flat 2D housing
+#endif
 static Shader crt;
 static int locRes, locBright;
+static Shader lightShader;	// directional + ambient lighting for the 3D case
+static Model cubeModel;		// unit cube, reused (scaled) for the case + bezel
+static int locLightDir, locLightColor, locAmbient, locViewPos;
+static int locGlowPos, locGlowColor; // monitor-glow point light (lights the dark room)
 static Music bootMusic;
 static Music runMusic;	  // looping room hum that follows the boot jingle
 static bool runStarted;	  // set once the boot jingle has handed off to runMusic
@@ -513,6 +634,219 @@ static void play_keysound(void) {
 	if (keySfxN > 0) PlaySound(keySfx[GetRandomValue(0, keySfxN - 1)]);
 }
 
+//----------------------------------------------------------------------------
+// Vintage PC scene (native 3D path). A CRT monitor + "pizza box" desktop case +
+// tilted keyboard, assembled procedurally from primitives -- the beige parts go
+// through the lighting shader (cubeModel), the glass is our CRT-shaded terminal
+// (screenTex), drawn unlit so it glows. Toggle with F2; render3D == false falls
+// back to the flat 2D housing. Origin is the desk surface (y = 0); the monitor
+// faces +Z. Swap in a .glb later -- only this function changes.
+//----------------------------------------------------------------------------
+// Vintage beige palette.
+static const Color V_BEIGE = {214, 201, 162, 255};
+static const Color V_BEIGE_DARK = {176, 162, 124, 255};
+static const Color V_BEZEL = {46, 44, 40, 255};
+static const Color V_KEYCAP = {230, 222, 196, 255};
+
+// A flat textured quad in the XY plane (facing +Z) at `center`, with explicit
+// UVs. V is flipped (1 at top) so the bottom-up render texture appears upright;
+// if it ever shows inverted, swap the v coordinates below.
+static void draw_screen_quad(Texture2D tex, Vector3 center, float w, float h) {
+	float x = center.x, y = center.y, z = center.z;
+	float hw = w * 0.5f, hh = h * 0.5f;
+	rlSetTexture(tex.id);
+	rlBegin(RL_QUADS);
+	rlColor4ub(255, 255, 255, 255);
+	rlNormal3f(0.0f, 0.0f, 1.0f);
+	rlTexCoord2f(0.0f, 1.0f);
+	rlVertex3f(x - hw, y + hh, z); // top-left
+	rlTexCoord2f(0.0f, 0.0f);
+	rlVertex3f(x - hw, y - hh, z); // bottom-left
+	rlTexCoord2f(1.0f, 0.0f);
+	rlVertex3f(x + hw, y - hh, z); // bottom-right
+	rlTexCoord2f(1.0f, 1.0f);
+	rlVertex3f(x + hw, y + hh, z); // top-right
+	rlEnd();
+	rlSetTexture(0);
+}
+
+// Lit box helper: a unit cube (cubeModel, carrying lightShader) scaled to `size`
+// at `pos`. Honours the current rlgl matrix stack, so it works inside the
+// keyboard's tilt transform too.
+static void draw_box(Vector3 pos, Vector3 size, Color tint) {
+	DrawModelEx(cubeModel, pos, (Vector3) {0, 1, 0}, 0.0f, size, tint);
+}
+
+//----------------------------------------------------------------------------
+// Interactive 3D keyboard. The keycaps are laid out from the *real* keyboard
+// tables (flatKey/flatRow/flatXU -- the same layout the on-screen keyboard
+// uses), so the geometry matches an actual board. A cap that's physically held
+// lights phosphor-green and sinks in. The legends are rendered into kbLabelTex
+// (render_kb_labels) on the same grid as the caps, then mapped onto the tilted
+// key-top plane -- so the labels share the caps' real 3D geometry (perspective
+// + tilt) instead of floating as flat screen text.
+//----------------------------------------------------------------------------
+#define KB3D_TILT 7.0f	 // backward tilt so the keytops face the camera
+#define KB3D_D 1.8f		 // keyboard depth (Z): 5 rows
+#define KB3D_W (KB3D_D * 3.0f) // width (X): 15 key-units over 5 rows -> square keys
+#define KB3D_SLAB 0.32f	 // base-slab thickness
+#define KB3D_CAP 0.14f	 // keycap height
+#define KB3D_Z 3.5f		 // keyboard centre, in front of the case
+#define KB3D_PRESS 0.06f // how far a held cap sinks
+
+static RenderTexture2D kbLabelTex; // key legends, drawn flat then mapped onto the caps
+
+// Render the legends into kbLabelTex (transparent background), on the same
+// normalized grid the caps use, so they line up when mapped onto the key tops.
+// Call OUTSIDE BeginMode3D (it switches render targets).
+static void render_kb_labels(void) {
+	int tw = kbLabelTex.texture.width, th = kbLabelTex.texture.height;
+	BeginTextureMode(kbLabelTex);
+	ClearBackground(BLANK);
+	int fs = (int) ((th / 5.0f) * 0.42f); // ~42% of a row's height
+	if (fs < 8) fs = 8;
+	for (int i = 0; i < flatN; i++) {
+		const Key *k = flatKey[i];
+		if (!k->label || !k->label[0]) continue; // spacebar etc. carry no legend
+		bool pressed = (k->key && IsKeyDown(k->key));
+		float uc = (flatXU[i] + k->w * 0.5f) / kbUnits; // 0..1 across the width
+		float vc = (flatRow[i] + 0.5f) / 5.0f;			// 0..1 back(row0)->front
+		int lw = MeasureText(k->label, fs);
+		Color col = pressed ? (Color) {20, 60, 40, 255} : (Color) {44, 41, 36, 255};
+		DrawText(k->label, (int) (uc * tw) - lw / 2, (int) (vc * th) - fs / 2, fs, col);
+	}
+	EndTextureMode();
+}
+
+static void draw_keyboard_3d(void) {
+	Vector3 kbWorld = {0.0f, KB3D_SLAB * 0.5f, KB3D_Z}; // slab rests on the table (y=0)
+	// transform from keyboard-local space to world: tilt about X, then translate.
+	Matrix M = MatrixMultiply(MatrixRotateX(KB3D_TILT * DEG2RAD), MatrixTranslate(kbWorld.x, kbWorld.y, kbWorld.z));
+
+	// base slab (tilted like the caps)
+	DrawModelEx(cubeModel, kbWorld, (Vector3) {1, 0, 0}, KB3D_TILT,
+				(Vector3) {KB3D_W + 0.3f, KB3D_SLAB, KB3D_D + 0.3f}, V_BEIGE);
+
+	float unitX = KB3D_W / kbUnits;	   // world X per layout key-unit
+	float rowPitch = KB3D_D / 5.0f;	   // 5 rows over the depth
+	float startX = -KB3D_W * 0.5f, startZ = -KB3D_D * 0.5f;
+	float gap = 0.05f;
+
+	for (int i = 0; i < flatN; i++) {
+		const Key *k = flatKey[i];
+		float w = k->w;
+		float cx = startX + (flatXU[i] + w * 0.5f) * unitX;
+		float cz = startZ + (flatRow[i] + 0.5f) * rowPitch; // row 0 (numbers) sits at the back
+		bool pressed = (k->key && IsKeyDown(k->key));
+		float capY = KB3D_SLAB * 0.5f + KB3D_CAP * 0.5f - (pressed ? KB3D_PRESS : 0.0f);
+
+		Vector3 worldCenter = Vector3Transform((Vector3) {cx, capY, cz}, M);
+		Color cap = pressed ? (Color) {150, 230, 200, 255} : V_KEYCAP; // phosphor when held
+		DrawModelEx(cubeModel, worldCenter, (Vector3) {1, 0, 0}, KB3D_TILT,
+					(Vector3) {w * unitX - gap, KB3D_CAP, rowPitch - gap}, cap);
+	}
+
+	// map the legend texture onto the key-top plane (a quad in the XZ plane,
+	// transformed by M so it tilts and lines up with the caps). UVs flip v
+	// because the render texture is bottom-up; back row (row 0) -> v = 1.
+	float topY = KB3D_SLAB * 0.5f + KB3D_CAP + 0.011f;
+	Vector3 bl = Vector3Transform((Vector3) {-KB3D_W * 0.5f, topY, -KB3D_D * 0.5f}, M);
+	Vector3 br = Vector3Transform((Vector3) {KB3D_W * 0.5f, topY, -KB3D_D * 0.5f}, M);
+	Vector3 fr = Vector3Transform((Vector3) {KB3D_W * 0.5f, topY, KB3D_D * 0.5f}, M);
+	Vector3 fl = Vector3Transform((Vector3) {-KB3D_W * 0.5f, topY, KB3D_D * 0.5f}, M);
+	rlDisableBackfaceCulling();
+	rlSetTexture(kbLabelTex.texture.id);
+	rlBegin(RL_QUADS);
+	rlColor4ub(255, 255, 255, 255);
+	rlNormal3f(0.0f, 1.0f, 0.0f);
+	rlTexCoord2f(0.0f, 1.0f);
+	rlVertex3f(bl.x, bl.y, bl.z); // back-left
+	rlTexCoord2f(0.0f, 0.0f);
+	rlVertex3f(fl.x, fl.y, fl.z); // front-left
+	rlTexCoord2f(1.0f, 0.0f);
+	rlVertex3f(fr.x, fr.y, fr.z); // front-right
+	rlTexCoord2f(1.0f, 1.0f);
+	rlVertex3f(br.x, br.y, br.z); // back-right
+	rlEnd();
+	rlSetTexture(0);
+	rlEnableBackfaceCulling();
+}
+
+static void draw_vintage_pc(void) {
+	// --- pizza-box desktop case (the monitor sits on top of it) ---
+	Vector3 caseSize = {5.6f, 0.9f, 4.6f};
+	Vector3 casePos = {0.0f, caseSize.y * 0.5f, 0.0f};
+	draw_box(casePos, caseSize, V_BEIGE);
+	// front detail: drive slot + power LED (LED colour follows game state)
+	draw_box((Vector3) {1.4f, 0.55f, caseSize.z * 0.5f + 0.02f}, (Vector3) {1.2f, 0.12f, 0.04f}, V_BEIGE_DARK);
+	bool won = state == STATE_SHELL && strcmp(game_mode(), "win") == 0;
+	Color led = won ? (Color) {120, 255, 140, 255} : (Color) {255, 120, 60, 255};
+	if ((state == STATE_BOOT || state == STATE_SPLASH) && fmodf(blink, 0.4f) < 0.2f)
+		led = (Color) {120, 60, 30, 255};
+	Vector3 ledPos = {-2.1f, 0.55f, caseSize.z * 0.5f + 0.04f};
+	BeginBlendMode(BLEND_ADDITIVE);
+	DrawSphere(ledPos, 0.12f, Fade(led, 0.25f)); // soft halo
+	EndBlendMode();
+	DrawCube(ledPos, 0.12f, 0.12f, 0.03f, led);
+
+	// --- CRT monitor case, with a tapered "tube" block behind it ---
+	float caseTop = caseSize.y;
+	Vector3 monSize = {4.4f, 3.6f, 3.6f};
+	Vector3 monPos = {0.0f, caseTop + monSize.y * 0.5f, 0.0f};
+	draw_box(monPos, monSize, V_BEIGE);
+	draw_box((Vector3) {0.0f, monPos.y, -monSize.z * 0.5f - 0.6f}, (Vector3) {3.0f, 2.6f, 1.2f}, V_BEIGE_DARK);
+
+	// --- dark bezel recessed into the front face ---
+	float monFrontZ = monSize.z * 0.5f;
+	Vector3 bezelPos = {0.0f, monPos.y + 0.15f, monFrontZ - 0.02f};
+	draw_box(bezelPos, (Vector3) {3.8f, 2.9f, 0.12f}, V_BEZEL);
+
+	// --- the glass: the live CRT-shaded terminal mapped onto a quad (unlit) ---
+	draw_screen_quad(screenTex.texture, (Vector3) {0.0f, bezelPos.y, monFrontZ + 0.06f}, 3.3f, 2.45f);
+
+	// brand label under the screen
+	draw_box((Vector3) {0.0f, monPos.y - 1.45f, monFrontZ + 0.02f}, (Vector3) {1.0f, 0.18f, 0.04f}, V_BEIGE_DARK);
+
+	// --- keyboard: interactive, real layout + labels (drawn from flatKey) ---
+	draw_keyboard_3d();
+}
+
+// The dark warehouse around the desk: concrete floor + far walls, a couple of
+// shelving silhouettes and some crates, and the work table the computer sits on
+// (its top surface is at y = 0, where the PC's footprint rests). Everything uses
+// the lit cubeModel, so surfaces near the monitor catch its phosphor glow while
+// the rest of the room falls away to black.
+static void draw_room(void) {
+	// concrete floor + warehouse shell (kept dark; most of it reads as black)
+	draw_box((Vector3) {0, -4.2f, 0}, (Vector3) {70, 0.4f, 70}, (Color) {40, 40, 44, 255});
+	draw_box((Vector3) {0, 6.0f, -22.0f}, (Vector3) {70, 24, 1.0f}, (Color) {30, 30, 34, 255}); // back wall
+	draw_box((Vector3) {-24.0f, 6.0f, 0}, (Vector3) {1.0f, 24, 60}, (Color) {28, 28, 32, 255});  // left wall
+	draw_box((Vector3) {24.0f, 6.0f, 0}, (Vector3) {1.0f, 24, 60}, (Color) {28, 28, 32, 255});   // right wall
+
+	// shelving-rack silhouettes in the back (uprights + a few shelves)
+	for (int s = -1; s <= 1; s += 2) {
+		float rx = s * 13.0f, rz = -16.0f;
+		Color steel = {44, 46, 52, 255};
+		draw_box((Vector3) {rx - 2.2f, 0.0f, rz}, (Vector3) {0.3f, 13.0f, 0.3f}, steel); // uprights
+		draw_box((Vector3) {rx + 2.2f, 0.0f, rz}, (Vector3) {0.3f, 13.0f, 0.3f}, steel);
+		for (int h = 0; h < 4; h++)
+			draw_box((Vector3) {rx, -3.5f + h * 3.0f, rz}, (Vector3) {5.0f, 0.25f, 2.4f}, (Color) {40, 36, 30, 255});
+	}
+
+	// a few crates on the floor near the table (floor top is at y = -4.0)
+	draw_box((Vector3) {-10.0f, -2.8f, 4.0f}, (Vector3) {2.4f, 2.4f, 2.4f}, (Color) {70, 56, 38, 255});
+	draw_box((Vector3) {-10.2f, -0.6f, 3.6f}, (Vector3) {2.0f, 2.0f, 2.0f}, (Color) {78, 62, 42, 255});
+	draw_box((Vector3) {9.5f, -2.7f, -2.0f}, (Vector3) {2.6f, 2.6f, 2.6f}, (Color) {66, 52, 36, 255});
+
+	// the work table the computer sits on: a dark wood top on steel legs, the
+	// top surface flush with y = 0 so the PC's footprint rests on it.
+	draw_box((Vector3) {0, -0.25f, 0.4f}, (Vector3) {11.5f, 0.5f, 9.5f}, (Color) {74, 60, 46, 255});
+	float lx = 5.2f, lz = 4.0f;
+	for (int i = 0; i < 4; i++)
+		draw_box((Vector3) {(i & 1) ? lx : -lx, -2.35f, (i & 2) ? lz + 0.4f : -lz + 0.4f}, (Vector3) {0.4f, 3.7f, 0.4f},
+				 (Color) {54, 56, 62, 255});
+}
+
 // One simulated frame: input, update, and the full compose-to-screen draw.
 static void UpdateDrawFrame(void) {
 		float dt = GetFrameTime();
@@ -537,6 +871,8 @@ static void UpdateDrawFrame(void) {
 
 		bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
 		if (IsKeyPressed(KEY_F11) || (altDown && IsKeyPressed(KEY_ENTER))) ToggleBorderlessWindowed();
+		// F2 flips 3D monitor <-> flat housing (desktop only; mobile has no 3D)
+		if (!g_isMobile && IsKeyPressed(KEY_F2)) render3D = !render3D;
 
 #if defined(__EMSCRIPTEN__)
 		// Keep the framebuffer matched to the responsive layout size. We measure
@@ -593,17 +929,21 @@ static void UpdateDrawFrame(void) {
 		float dw = VIRT_W * gscale, dh = VIRT_H * gscale;
 		Rectangle dst = {(sw - dw) / 2.0f, glassTop + (glassAreaH - dh) / 2.0f, dw, dh};
 
-		// pointer over the on-screen keyboard (mouse, or touch mapped to mouse)
+		// pointer over the on-screen keyboard (mouse, or touch mapped to mouse).
+		// Skipped in 3D mode so the mouse is free for the orbit camera; the 3D
+		// scene has its own interactive keyboard.
 		g_kbHover = -1;
 		g_kbDown = false;
 #if SHOW_KEYBOARD
-		Vector2 mp = GetMousePosition();
-		for (int i = 0; i < flatN; i++)
-			if (CheckCollisionPointRec(mp, keyRects[i])) {
-				g_kbHover = i;
-				break;
-			}
-		g_kbDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+		if (!render3D) {
+			Vector2 mp = GetMousePosition();
+			for (int i = 0; i < flatN; i++)
+				if (CheckCollisionPointRec(mp, keyRects[i])) {
+					g_kbHover = i;
+					break;
+				}
+			g_kbDown = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+		}
 #endif
 
 		bool fnMode = g_fnToggled;
@@ -850,6 +1190,88 @@ static void UpdateDrawFrame(void) {
 		// (screen size, glass rect and keyboard geometry were computed at the top of the frame)
 
 		BeginDrawing();
+
+		// flick (per-frame phosphor flicker) and the vertical-flip blit rect are
+		// shared by the flat (2D) and 3D compositors.
+		float flick = 0.93f + 0.07f * (float) GetRandomValue(0, 100) / 100.0f;
+		Rectangle src = {0, 0, (float) VIRT_W, (float) -VIRT_H};
+
+		if (render3D) {
+			// ---- 3D path: terminal -> CRT shader -> flat texture -> screen face ----
+			// Pass 2: run the existing CRT shader on the terminal into a flat
+			// texture, preserving today's look (curve, scanlines, bloom) before it
+			// gets mapped onto geometry. Scanlines are driven by the fixed texture
+			// size, not the on-screen size, so they don't shimmer as the camera or
+			// window moves.
+			Vector2 res3d = {(float) screenTex.texture.width, (float) screenTex.texture.height};
+			SetShaderValue(crt, locRes, &res3d, SHADER_UNIFORM_VEC2);
+			SetShaderValue(crt, locBright, &flick, SHADER_UNIFORM_FLOAT);
+			BeginTextureMode(screenTex);
+			ClearBackground(BLACK);
+			BeginShaderMode(crt);
+			DrawTexturePro(virt.texture, src, (Rectangle) {0, 0, res3d.x, res3d.y}, (Vector2) {0, 0}, 0, WHITE);
+			EndShaderMode();
+			EndTextureMode();
+
+			render_kb_labels(); // legends into kbLabelTex (before Mode3D; it swaps targets)
+
+			// double-click the glass to toggle a head-on, screen-filling focus
+			// (like the 2D sizing); it animates in/out. Pick the glass with a ray.
+			if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+				double now = GetTime();
+				Vector2 mp = GetMousePosition();
+				bool dbl = (now - lastClickTime < 0.35) && (Vector2Distance(mp, lastClickPos) < 8.0f);
+				if (dbl) {
+					Ray ray = GetScreenToWorldRay(mp, cam);
+					BoundingBox glass = {(Vector3) {SCREEN_CX - SCREEN_HW, SCREEN_CY - SCREEN_HH, SCREEN_CZ - 0.1f},
+										 (Vector3) {SCREEN_CX + SCREEN_HW, SCREEN_CY + SCREEN_HH, SCREEN_CZ + 0.1f}};
+					if (GetRayCollisionBox(ray, glass).hit) camFocused = !camFocused;
+					lastClickTime = -1.0; // consume, so a triple-click doesn't re-trigger
+				} else {
+					lastClickTime = now;
+					lastClickPos = mp;
+				}
+			}
+
+			// orbit camera: right-drag rotates (X) and tilts (Y); the wheel zooms
+			// while the right button is held, so a free wheel still scrolls the
+			// terminal. Arrow keys are left to the shell (history/scrollback).
+			// Dragging or zooming breaks the focus so you can look around again.
+			if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+				Vector2 d = GetMouseDelta();
+				orbitAngle += d.x * 0.005f;
+				orbitHeight = Clamp(orbitHeight - d.y * 0.03f, 1.5f, 11.0f);
+				orbitDist = Clamp(orbitDist - GetMouseWheelMove() * 0.8f, 6.0f, 24.0f);
+				if (d.x != 0.0f || d.y != 0.0f || GetMouseWheelMove() != 0.0f) camFocused = false;
+			}
+
+			// animate the focus blend, then lerp the camera between the orbit pose
+			// and a head-on pose sized so the glass fills the view.
+			focusT = Clamp(focusT + (camFocused ? 1.0f : -1.0f) * dt * 3.2f, 0.0f, 1.0f);
+			float e = focusT * focusT * (3.0f - 2.0f * focusT); // smoothstep ease
+			Vector3 orbitPos = {sinf(orbitAngle) * orbitDist, orbitHeight, cosf(orbitAngle) * orbitDist};
+			Vector3 orbitTgt = {0.0f, 1.4f, 0.0f}; // lower target -> camera looks downward
+			Vector3 focusPos = {SCREEN_CX, SCREEN_CY, SCREEN_CZ + 2.7f}; // head-on, screen-filling
+			Vector3 focusTgt = {SCREEN_CX, SCREEN_CY, SCREEN_CZ};
+			cam.position = Vector3Lerp(orbitPos, focusPos, e);
+			cam.target = Vector3Lerp(orbitTgt, focusTgt, e);
+			SetShaderValue(lightShader, locViewPos, &cam.position, SHADER_UNIFORM_VEC3);
+
+			ClearBackground((Color) {5, 6, 8, 255}); // near-black warehouse air
+			BeginMode3D(cam);
+			draw_room();
+			draw_vintage_pc();
+			EndMode3D();
+
+			DrawText("v" PROJECT_VERSION "  F11 fullscreen  F2: 2D/3D  right-drag orbit / wheel zoom  dbl-click screen: focus",
+					 12, sh - 20,
+					 10, (Color) {120, 124, 134, 255});
+			// (no on-screen keyboard overlay here -- the 3D scene has its own
+			// interactive keyboard, and the mouse drives the camera)
+			EndDrawing();
+			return; // 3D frame done; skip the flat-housing compositor below
+		}
+
 		ClearBackground(compact ? (Color) {0, 0, 0, 255} : (Color) {16, 15, 14, 255});
 
 		// the bulky molded housing only renders on roomy (desktop) windows
@@ -868,9 +1290,6 @@ static void UpdateDrawFrame(void) {
 			DrawRectangleGradientV((int) well.x, (int) well.y, (int) well.width, 10,
 								   Fade((Color) {200, 220, 220, 255}, 0.10f), BLANK);
 		}
-
-		float flick = 0.93f + 0.07f * (float) GetRandomValue(0, 100) / 100.0f;
-		Rectangle src = {0, 0, (float) VIRT_W, (float) -VIRT_H};
 
 		// phosphor bleed: a soft halo spilling out of the glass onto the well
 		BeginBlendMode(BLEND_ADDITIVE);
@@ -925,7 +1344,7 @@ static void UpdateDrawFrame(void) {
 
 int main(void) {
 	const int winW = VIRT_W * SCALE + BEZEL * 2;
-	const int winH = VIRT_H * SCALE + BEZEL * 2 + 260; // extra room for the on-screen keyboard
+	const int winH = VIRT_H * SCALE + BEZEL * 2 + (260 * SHOW_KEYBOARD); // extra room for the on-screen keyboard
 	SetConfigFlags(FLAG_VSYNC_HINT | FLAG_WINDOW_RESIZABLE);
 	InitWindow(winW, winH, "VFD-9000 TERMINAL");
 
@@ -937,6 +1356,14 @@ int main(void) {
 	SetWindowMinSize(VIRT_W + BEZEL * 2, VIRT_H + BEZEL * 2 + 160);
 #if !defined(__EMSCRIPTEN__)
 	SetTargetFPS(60); // on the web the browser's rAF drives the frame rate
+#else
+	// Detect a touch/mobile browser. Desktop browsers get the full 3D scene;
+	// phones/tablets stay on the 2D path (cheaper, and the on-screen keyboard is
+	// the input). iPadOS 13+ masquerades as "Macintosh" but reports touch points.
+	g_isMobile = emscripten_run_script_int(
+		"(/Mobi|Android|iPhone|iPad|iPod|IEMobile|BlackBerry|Opera Mini/i.test(navigator.userAgent) ||"
+		" (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent))) ? 1 : 0");
+	render3D = !g_isMobile; // desktop web -> 3D, mobile -> 2D
 #endif
 
 	InitAudioDevice();
@@ -993,6 +1420,48 @@ int main(void) {
 	// shader re-imposes scanlines on top, so the picture still reads as a tube
 	SetTextureFilter(virt.texture, TEXTURE_FILTER_BILINEAR);
 
+	// 3D monitor resources -- allocated for the full 3D experience (native, or a
+	// desktop web browser). Skipped on mobile, which only ever shows the flat 2D
+	// housing. Guarding the allocation keeps mobile light.
+	if (!g_isMobile) {
+	// flat intermediate the CRT shader renders into before it's mapped onto the
+	// 3D screen face; 2x the virtual size keeps the mapped image crisp
+	screenTex = LoadRenderTexture(VIRT_W * 2, VIRT_H * 2);
+	SetTextureFilter(screenTex.texture, TEXTURE_FILTER_BILINEAR);
+	cam = (Camera3D) {
+		.position = {0, 0, 2.7f}, .target = {0, 0, 0}, .up = {0, 1, 0}, .fovy = 60.0f, .projection = CAMERA_PERSPECTIVE};
+
+	// case lighting: a unit cube driven by a directional + ambient shader. The
+	// light direction / colour / ambient are constant; viewPos is updated per
+	// frame (for the specular) in the 3D compose branch.
+	lightShader = LoadShaderFromMemory(LIGHT_VS, LIGHT_FS);
+	locLightDir = GetShaderLocation(lightShader, "lightDir");
+	locLightColor = GetShaderLocation(lightShader, "lightColor");
+	locAmbient = GetShaderLocation(lightShader, "ambient");
+	locViewPos = GetShaderLocation(lightShader, "viewPos");
+	locGlowPos = GetShaderLocation(lightShader, "glowPos");
+	locGlowColor = GetShaderLocation(lightShader, "glowColor");
+	// Dark warehouse room: a dim, cool overhead lamp + almost no ambient, so the
+	// monitor's phosphor glow (the point light below) is what actually lights the
+	// scene -- the computer reads as the one bright thing in a black room.
+	Vector3 lightDir = {-0.35f, -0.92f, -0.2f}; // a high warehouse lamp, slightly off-axis
+	Vector4 lightColor = {0.42f, 0.46f, 0.55f, 1.0f};
+	Vector4 ambient = {0.05f, 0.05f, 0.07f, 1.0f};
+	Vector3 glowPos = {0.0f, 2.85f, 1.86f};			   // world position of the monitor glass
+	Vector4 glowColor = {0.43f, 1.0f, 0.84f, 1.35f};   // phosphor teal, a = intensity
+	SetShaderValue(lightShader, locLightDir, &lightDir, SHADER_UNIFORM_VEC3);
+	SetShaderValue(lightShader, locLightColor, &lightColor, SHADER_UNIFORM_VEC4);
+	SetShaderValue(lightShader, locAmbient, &ambient, SHADER_UNIFORM_VEC4);
+	SetShaderValue(lightShader, locGlowPos, &glowPos, SHADER_UNIFORM_VEC3);
+	SetShaderValue(lightShader, locGlowColor, &glowColor, SHADER_UNIFORM_VEC4);
+	cubeModel = LoadModelFromMesh(GenMeshCube(1.0f, 1.0f, 1.0f));
+	cubeModel.materials[0].shader = lightShader;
+	// keyboard legends, drawn flat and mapped onto the key tops (3:1 to match the
+	// keyboard footprint). Bilinear so the small text stays smooth on the caps.
+	kbLabelTex = LoadRenderTexture(1200, 400);
+	SetTextureFilter(kbLabelTex.texture, TEXTURE_FILTER_BILINEAR);
+	}
+
 	termFont = LoadFontFromMemory(".ttf", VT323_Regular_ttf, (int) VT323_Regular_ttf_len, FONT_SZ, NULL, 0);
 	SetTextureFilter(termFont.texture, TEXTURE_FILTER_POINT);
 
@@ -1017,8 +1486,11 @@ int main(void) {
 	if (runMusic.frameCount > 0) UnloadMusicStream(runMusic);
 	CloseAudioDevice();
 	UnloadShader(crt);
+	UnloadModel(cubeModel); // frees the mesh + the material's lightShader too
+	UnloadRenderTexture(kbLabelTex);
 	UnloadFont(termFont);
 	UnloadRenderTexture(virt);
+	UnloadRenderTexture(screenTex);
 	CloseWindow();
 #endif
 	return 0;
