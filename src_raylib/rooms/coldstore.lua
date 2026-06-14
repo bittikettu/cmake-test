@@ -146,7 +146,7 @@ DOOR CONTROL ....... ONLINE (LOCKED)]],
 		{path = "/home/guest/backup.tar", archive = true,
 		 content = "docs/0000755 0000041 ustar  guest guest docs/memo.txt0000644" ..
 			" 0000312 ustar  #@!~..%[binary sludge]..^&*  hint: this is an" ..
-			" archive. try:  tar -xf backup.tar"},
+			" archive."},
 		{path = "/home/guest/.hint", hidden = true,
 		 content = "you found me. archives unpack with:\n    tar -xf backup.tar"},
 		{path = "/home/guest/docs", dir = true, present = false},
