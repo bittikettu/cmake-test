@@ -245,6 +245,17 @@ static void draw_center(const char *s, int y, Color c) {
 	draw_mono(s, (VIRT_W - (int) strlen(s) * CELL_W) / 2, y, c);
 }
 
+// The classic raylib mark -- a heavy square border with "raylib" tucked into
+// the lower-right corner -- recolored into the VFD phosphor palette so the
+// attribution reads as part of the display rather than a sticker on top of it.
+// (x, y) is the top-left of the square; sz is its side in virtual pixels.
+static void draw_raylib_logo(int x, int y, int sz, Color c) {
+	int t = sz / 16;
+	if (t < 2) t = 2; // border thickness, scaled like the real logo
+	DrawRectangleLinesEx((Rectangle) {(float) x, (float) y, (float) sz, (float) sz}, (float) t, c);
+	draw_mono("raylib", x + sz - 6 * CELL_W - 3, y + sz - CELL_H - 2, c);
+}
+
 // CRT glass shader. The flat framebuffer is sampled through a barrel-distorted
 // UV so the picture bulges like real tube glass; scanlines, vignette, chroma
 // fringing and a corner glare ride along the curve to sell the 3D surface.
@@ -778,6 +789,16 @@ static void UpdateDrawFrame(void) {
 			draw_center("(c) 1985", cy + 60, dim);
 			if (splashTimer > 1.2f && fmodf(blink, 1.0f) < 0.6f)
 				draw_center("INITIALIZING ...", cy + 92, hot);
+			// "POWERED BY [raylib]" attribution, tucked into the bottom-right
+			// corner and warmed in with the rest of the splash as the tube comes up.
+			{
+				int logoSz = 52;
+				int logoX = VIRT_W - PAD_X - logoSz;	// flush to the right margin
+				int logoY = VIRT_H - PAD_Y - logoSz;
+				int labelX = logoX - 12 - 10 * CELL_W;	// "POWERED BY" sits left of the mark
+				draw_mono("POWERED BY", labelX, logoY + (logoSz - CELL_H) / 2, dim);
+				draw_raylib_logo(logoX, logoY, logoSz, hot);
+			}
 			EndTextureMode();
 			goto compose;
 		}
