@@ -260,8 +260,8 @@ static const char *CRT_FS =
 	"uniform vec4 colDiffuse;\n"
 	"uniform vec2 uResolution;\n"
 	"uniform float uBright;\n"
-	"const float CURVE = 32.0;\n"  // flatter glass for small mobile screens
-	"const float SCAN = 0.30;\n"
+	"const float CURVE = 64.0;\n"  // flatter glass for small mobile screens
+	"const float SCAN = 0.15;\n"
 	"const float VIGN = 0.28;\n"
 	"vec2 curve(vec2 uv){\n"
 	"    uv = uv*2.0-1.0;\n"
@@ -275,10 +275,10 @@ static const char *CRT_FS =
 	"    float mask = e.x*e.y;\n"
 	"    vec2 d = uv-0.5;\n"
 	"    vec3 col = texture2D(texture0, uv).rgb;\n" // no chroma fringing: small screens read sharper
-	"    vec2 px = 1.5/uResolution;\n"
+	"    vec2 px = 1.0/uResolution;\n"
 	"    vec3 glow = texture2D(texture0, uv+vec2(px.x,0.0)).rgb + texture2D(texture0, uv-vec2(px.x,0.0)).rgb\n"
 	"              + texture2D(texture0, uv+vec2(0.0,px.y)).rgb + texture2D(texture0, uv-vec2(0.0,px.y)).rgb;\n"
-	"    col += glow*0.06;\n"
+	"    col += glow*0.02;\n"
 	"    float s = sin(uv.y*uResolution.y*3.14159);\n"
 	"    col *= 1.0 - SCAN*(0.5-0.5*s);\n"
 	"    float m = 0.5+0.5*sin(uv.x*uResolution.x*1.5708);\n"
