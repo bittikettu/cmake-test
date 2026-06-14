@@ -1,0 +1,71 @@
+name: Native Release Build
+
+on:
+  push:
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: vfd9000-linux-x86_64.tar.gz
+          - os: windows-latest
+            artifact_name: vfd9000-windows-amd64.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxext-dev libxfixes-dev libgl1-mesa-dev libasound2-dev
+
+      - name: Configure CMake
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd build/src_raylib
+          if (Test-Path modular_cmake-raylib-app.exe) { Rename-Item modular_cmake-raylib-app.exe vfd9000.exe }
+          Compress-Archive -Path * -DestinationPath ../../${{ matrix.artifact_name }}
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: |
+          cd build/src_raylib
+          if [ -f modular_cmake-raylib-app ]; then mv modular_cmake-raylib-app vfd9000; fi
+          tar -czvf ../../${{ matrix.artifact_name }} *
+
+      - name: Upload Build Artifact (for workflow_dispatch)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_name }}
