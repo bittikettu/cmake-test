@@ -54,13 +54,59 @@ local builtins = {
 	{name = "sudo"}, {name = "reboot"}, {name = "logout"},
 }
 
--- engine-owned /usr/bin nodes, shared by every room
-local binNodes = {
+-- engine-owned rootfs nodes, shared by every room
+local baseNodes = {
+	{path = "/", dir = true, present = true},
+	{path = "/bin", dir = true, present = true},
+	{path = "/sbin", dir = true, present = true},
+	{path = "/etc", dir = true, present = true},
+	{path = "/dev", dir = true, present = true},
+	{path = "/dev/tty1", present = true, content = "character special file (console)\n"},
+	{path = "/dev/tty2", present = true, content = "character special file (serial)\n"},
+	{path = "/proc", dir = true, present = true},
+	{path = "/sys", dir = true, present = true},
+	{path = "/tmp", dir = true, present = true},
+	{path = "/var", dir = true, present = true},
+	{path = "/var/log", dir = true, present = true},
+	{path = "/home", dir = true, present = true},
+	{path = "/home/guest", dir = true, present = true},
+	{path = "/root", dir = true, present = true},
+	{path = "/boot", dir = true, present = true},
+	{path = "/lib", dir = true, present = true},
+	{path = "/lib/modules", dir = true, present = true},
+	{path = "/opt", dir = true, present = true},
+	{path = "/mnt", dir = true, present = true},
+	{path = "/media", dir = true, present = true},
+	{path = "/run", dir = true, present = true},
+	{path = "/srv", dir = true, present = true},
 	{path = "/usr", dir = true, present = true},
 	{path = "/usr/bin", dir = true, present = true},
+	{path = "/usr/sbin", dir = true, present = true},
+	{path = "/usr/lib", dir = true, present = true},
+	{path = "/usr/local", dir = true, present = true},
+	{path = "/etc/passwd", present = true, content = "root:x:0:0:root:/root:/bin/bash\nguest:x:1000:1000:Guest,,,:/home/guest:/bin/bash\n"},
+	{path = "/etc/fstab", present = true, content = "# /etc/fstab: static file system information.\n/dev/sda1  /  ext1  errors=remount-ro  0  1\n"},
+	{path = "/etc/os-release", present = true, content = "NAME=\"VFD-OS\"\nVERSION=\"9000\"\nID=vfd\nPRETTY_NAME=\"VFD-9000 Firmware\"\n"},
+	{path = "/etc/hostname", present = true, content = "vfd-9000\n"},
+	{path = "/proc/version", present = true, content = "Linux version 2.6.32-vfd (root@vfd-build) (gcc version 2.1.2) #1 SMP Fri Jun 13 14:12:00 UTC 1984\n"},
+	{path = "/proc/cpuinfo", present = true, content = "processor\t: 0\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t\t: 15\nmodel name\t: Intel(R) Core(TM)2 Duo CPU     T7300  @ 2.00GHz\nstepping\t: 10\ncpu MHz\t\t: 2000.000\ncache size\t: 4096 KB\n"},
+	{path = "/proc/meminfo", present = true, content = "MemTotal:         512000 kB\nMemFree:          256000 kB\nBuffers:           10240 kB\nCached:           102400 kB\n"},
+	{path = "/proc/cmdline", present = true, content = "root=/dev/sda1 ro quiet\n"},
 }
+
+-- common linux binaries to populate /bin
+local commonBins = {
+	"bash", "sh", "cp", "rm", "mkdir", "rmdir", "touch", "more", "less", "head", "tail", "awk", "sed", "find", "xargs", "gzip", "gunzip", "bzip2", "bunzip2", "zip", "unzip", "ssh", "scp", "ping", "netstat", "ifconfig", "ip", "route", "iptables", "ps", "top", "kill", "killall", "df", "du", "mount", "umount", "chmod", "chown", "chgrp", "su", "passwd", "adduser", "userdel", "systemctl", "journalctl", "insmod", "rmmod", "lspci", "lsusb", "lscpu", "free", "uptime", "who", "w", "last", "history", "printf", "cal", "bc", "expr", "vi", "vim", "nano", "wget", "curl", "ftp", "nc", "telnet"
+}
+for _, b in ipairs(commonBins) do
+	baseNodes[#baseNodes + 1] = {
+		path = "/bin/" .. b, present = true,
+		content = "ELF executable '" .. b .. "' -- a command, not a cat toy.",
+	}
+end
+
 for _, b in ipairs(builtins) do
-	binNodes[#binNodes + 1] = {
+	baseNodes[#baseNodes + 1] = {
 		path = "/usr/bin/" .. b.name, present = true,
 		content = "ELF executable '" .. b.name .. "' -- a command, not a cat toy.",
 	}
@@ -89,12 +135,12 @@ local function resolve(arg)
 	return "/" .. table.concat(parts, "/")
 end
 
--- visit the active room's nodes, then the shared /usr/bin nodes
+-- visit the active room's nodes, then the shared rootfs nodes
 local function each_node(fn)
 	if S.room then
 		for _, n in ipairs(S.room.fs) do fn(n) end
 	end
-	for _, n in ipairs(binNodes) do fn(n) end
+	for _, n in ipairs(baseNodes) do fn(n) end
 end
 
 local function find(path) -- present nodes only (room + /usr/bin)
@@ -203,10 +249,13 @@ function verbs.ls(args)
 		return
 	end
 	local row, used, shown = "", 0, 0
+	local seen = {}
 	each_node(function(n)
 		if not n.present or not in_dir(n.path, path) then return end
 		if n.hidden and not all then return end
 		local entry = basename(n.path) .. (n.dir and "/" or "")
+		if seen[entry] then return end
+		seen[entry] = true
 		local width = (#entry // LS_COL_W + 1) * LS_COL_W
 		if used > 0 and used + width > COLS then
 			host.putline(row); row = ""; used = 0
