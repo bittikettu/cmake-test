@@ -532,12 +532,19 @@ function verbs.unlock(args)
 		timeStr = string.format("%02d:%02d", t // 60, t % 60)
 	end
 	host.print("time to escape: " .. timeStr)
-	-- append this escape to the persistent playthrough log
-	local rec = host.now() .. "|" .. room.id .. "|" .. (S.hard and "l33t" or "n00b") ..
-		"|" .. timeStr
+	-- append this escape to the local (per-device) playthrough log
+	local mode = S.hard and "l33t" or "n00b"
+	local rec = host.now() .. "|" .. room.id .. "|" .. mode .. "|" .. timeStr
 	host.log_save((host.log_load() or "") .. rec .. "\n")
-	host.print("press ENTER to return to cartridge selection, or ESC to power off.")
-	S.mode = "win"
+	if host.cloud then
+		-- web: capture initials, then post the run to the cloud (see do_initials)
+		S.pending = {room = room.id, mode = mode, time = timeStr}
+		host.print("cloud sync: type initials to save this run (blank = skip).")
+		S.mode = "initials"
+	else
+		host.print("press ENTER to return to cartridge selection, or ESC to power off.")
+		S.mode = "win"
+	end
 end
 
 function verbs.mv(args)
@@ -562,8 +569,8 @@ end
 -- playthrough log: parse the pipe-delimited records host.log_save wrote and
 -- render an aligned table (kept separate so the self-test can exercise the
 -- formatter without touching real persistence).
-local function render_log(text)
-	local out = {"PLAYTHROUGH LOG"}
+local function render_log(text, title)
+	local out = {title or "PLAYTHROUGH LOG"}
 	local recs = {}
 	for line in (text .. "\n"):gmatch("(.-)\n") do
 		local date, room, mode, time = line:match("^(.-)|(.-)|(.-)|(.-)$")
@@ -584,12 +591,35 @@ local function render_log(text)
 	return out
 end
 
+local function sanitize_initials(s)
+	return (s or ""):upper():gsub("[^A-Z0-9]", ""):sub(1, 4)
+end
+
 function verbs.log(args)
-	if words(args)[1] == "clear" then
+	local a = words(args)[1]
+	if a == "clear" then
 		host.log_save("")
 		host.print("playthrough log cleared.")
 		return
 	end
+	if a then
+		-- `log INITIALS`: pull this player's runs from the cloud (any device)
+		local ini = sanitize_initials(a)
+		if ini == "" then host.print("usage: log [INITIALS|clear]"); return end
+		if not host.cloud then
+			host.print("cloud log is only available in the web build.")
+			return
+		end
+		host.print("querying cloud log for " .. ini .. " ...")
+		local text = host.cloud_fetch(ini) or ""
+		if text == "" then
+			host.print("no cloud runs for " .. ini .. " (or cloud unreachable).")
+			return
+		end
+		for _, line in ipairs(render_log(text, "CLOUD LOG -- " .. ini)) do host.print(line) end
+		return
+	end
+	-- no arg: this device's local log
 	for _, line in ipairs(render_log(host.log_load() or "")) do host.print(line) end
 end
 
@@ -780,6 +810,23 @@ local function run_shell(line)
 	else host.print(verb .. ": command not found (try 'help')") end
 end
 
+-- after a win on the web build: take the player's initials and post the run to
+-- the cloud, then drop into the normal win screen.
+local function do_initials(line)
+	host.putline(game.prompt() .. line)
+	local ini = sanitize_initials(line)
+	local p = S.pending
+	if ini ~= "" and p then
+		host.cloud_submit(ini, p.room, p.mode, p.time)
+		host.print("posted as " .. ini .. ". see your runs anywhere with:  log " .. ini)
+	else
+		host.print("skipped cloud save.")
+	end
+	S.pending = nil
+	host.print("press ENTER to return to cartridge selection, or ESC to power off.")
+	S.mode = "win"
+end
+
 -- C -> Lua entry points -----------------------------------------------------
 function game.start() -- called by the host once the boot animation finishes
 	S.mode = "select"
@@ -795,12 +842,14 @@ function game.submit(line)
 	if S.mode == "select" then do_select(line)
 	elseif S.mode == "login" then do_login(line)
 	elseif S.mode == "shell" then run_shell(line)
+	elseif S.mode == "initials" then do_initials(line)
 	elseif S.mode == "win" then game.start() end
 end
 
 function game.prompt()
 	if S.mode == "select" then return "load cartridge: " end
 	if S.mode == "login" then return "vfd-9000 login: " end
+	if S.mode == "initials" then return "enter initials: " end
 	if S.mode == "shell" then
 		local shown = S.cwd
 		if shown:sub(1, 11) == "/home/guest" then shown = "~" .. shown:sub(12) end
@@ -832,6 +881,16 @@ local function reset_state()
 	S.cwd, S.loginTime, S.wrongTries = "/home/guest", 0, 0
 end
 
+-- after a winning unlock the web build asks for initials before the win screen;
+-- native goes straight to win. Drive whichever path this build takes.
+local function finish_win(label)
+	if host.cloud then
+		assert(S.mode == "initials", label .. ": initials prompt (web)")
+		game.submit("TST")
+	end
+	assert(S.mode == "win", label)
+end
+
 local function selftest()
 	assert(#rooms >= 1, "at least one room")
 	-- the playthrough-log formatter renders records without touching persistence
@@ -840,6 +899,7 @@ local function selftest()
 		assert(lines[1] == "PLAYTHROUGH LOG", "log header")
 		assert(lines[#lines] == "(1 escape)", "log counts one escape")
 		assert(render_log("")[2] == "no escapes recorded yet.", "empty log message")
+		assert(type(host.cloud_fetch("TST")) == "string", "cloud_fetch returns string")
 	end
 	-- full win on Cold Storage (simplest gate)
 	local has_cs = false
@@ -861,7 +921,7 @@ local function selftest()
 	game.submit("unlock 0000") -- wrong code: should NOT win
 	assert(S.mode == "shell", "stay in shell on wrong code")
 	game.submit("unlock " .. S.code) -- correct code + gate satisfied
-	assert(S.mode == "win", "win after correct unlock")
+	finish_win("win after correct unlock")
 	-- Cold Vault loads + reaches a shell (db room)
 	if (function() for _, r in ipairs(rooms) do if r.id == "coldvault" then return true end end end)() then
 		reset_state()
@@ -894,24 +954,29 @@ local function selftest()
 		game.submit("unlock 0000") -- wrong code: must NOT win
 		assert(S.mode == "shell", "rack9 stays locked on wrong code")
 		game.submit("unlock " .. S.code) -- correct code + both gates
-		assert(S.mode == "win", "rack9 win after correct unlock")
+		finish_win("rack9 win after correct unlock")
 	end
 end
 
 function game.run_selftest()
 	local rp, rpl, rc, rplay = host.print, host.putline, host.clear, host.play
-	-- also stub persistence: the scripted wins must NOT touch the real log file
+	-- also stub persistence + cloud: the scripted wins must NOT touch the real
+	-- log file or hit the network
 	local rnow, rload, rsave = host.now, host.log_load, host.log_save
+	local rsub, rfetch = host.cloud_submit, host.cloud_fetch
 	local sink = function() end
 	host.print, host.putline, host.clear, host.play = sink, sink, sink, sink
 	host.now = function() return "1970-01-01 00:00" end
 	host.log_load = function() return "" end
 	host.log_save = sink
+	host.cloud_submit = sink
+	host.cloud_fetch = function() return "" end
 	local snap = snapshot_rooms()
 	local ok, err = pcall(selftest)
 	restore_rooms(snap)
 	reset_state()
 	host.print, host.putline, host.clear, host.play = rp, rpl, rc, rplay
 	host.now, host.log_load, host.log_save = rnow, rload, rsave
+	host.cloud_submit, host.cloud_fetch = rsub, rfetch
 	return ok and "PASS" or ("FAIL: " .. tostring(err))
 end

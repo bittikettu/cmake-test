@@ -29,6 +29,15 @@
   </div>
   <div id="note">click the screen to enable sound &middot; pinch to zoom &middot; F11 fullscreen</div>
   <script>
+    // ---- Supabase cloud log (web only) -------------------------------------
+    // Paste your project's values here (Supabase dashboard -> Project Settings
+    // -> API). BOTH are safe to expose publicly: the anon key is the client key,
+    // and access is governed by the table's Row-Level-Security policies. Leave
+    // them blank to disable cloud sync (the game still works, local log only).
+    window.SUPABASE_URL = "https://nowkvcwgcpktuavchrnn.supabase.co";       // e.g. "https://abcdxyz.supabase.co"
+    window.SUPABASE_ANON_KEY = "sb_publishable_Q591aULAkvOl62lBIXLe5A_-4H7aGoK";  // the public "anon" / publishable key
+  </script>
+  <script>
     // Browsers block audio until a user gesture; hide the hint after first click.
     addEventListener('pointerdown', function () {
       var n = document.getElementById('note');

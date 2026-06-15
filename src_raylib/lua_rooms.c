@@ -121,6 +121,81 @@ static int l_host_log_save(lua_State *Ls) {
 	return 0;
 }
 
+// host.cloud_submit(initials, room, mode, time)  -- web-only: POST one escape to
+// the Supabase 'escapes' table. Fire-and-forget; failures are swallowed. The
+// public anon key + URL are injected by shell.html (window.SUPABASE_*). No-op on
+// native (raylib has no HTTPS; the local file log is the native store).
+static int l_host_cloud_submit(lua_State *Ls) {
+	const char *initials = luaL_checkstring(Ls, 1);
+	const char *room = luaL_checkstring(Ls, 2);
+	const char *mode = luaL_checkstring(Ls, 3);
+	const char *time = luaL_checkstring(Ls, 4);
+#if defined(__EMSCRIPTEN__)
+	// clang-format off
+	EM_ASM({
+		if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) return;
+		fetch(window.SUPABASE_URL + '/rest/v1/escapes', {
+			method: 'POST',
+			headers: {
+				'apikey': window.SUPABASE_ANON_KEY,
+				'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY,
+				'Content-Type': 'application/json',
+				'Prefer': 'return=minimal'
+			},
+			body: JSON.stringify({
+				initials: UTF8ToString($0), room: UTF8ToString($1),
+				mode: UTF8ToString($2), time: UTF8ToString($3)
+			})
+		}).catch(function (e) {});
+	}, initials, room, mode, time);
+	// clang-format on
+#else
+	(void) initials; (void) room; (void) mode; (void) time;
+#endif
+	return 0;
+}
+
+// host.cloud_fetch(initials) -> string  -- web-only: GET this player's escapes
+// and return them in the SAME pipe format the local log uses ("date|room|mode|
+// time" per line), so game.lua's render_log can display either source. Blocks on
+// the async fetch via ASYNCIFY (a brief pause, like the boot sync). "" on native
+// or on any error/empty result.
+static int l_host_cloud_fetch(lua_State *Ls) {
+	const char *initials = luaL_checkstring(Ls, 1);
+#if defined(__EMSCRIPTEN__)
+	// clang-format off
+	EM_ASM({
+		window.__cloudReady = 0; window.__cloudResult = '';
+		if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) { window.__cloudReady = 1; return; }
+		var ini = UTF8ToString($0);
+		var url = window.SUPABASE_URL + '/rest/v1/escapes?initials=eq.'
+			+ encodeURIComponent(ini)
+			+ '&select=created_at,room,mode,time&order=created_at.desc&limit=50';
+		fetch(url, { headers: {
+			'apikey': window.SUPABASE_ANON_KEY,
+			'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY
+		} })
+		.then(function (r) { return r.json(); })
+		.then(function (rows) {
+			window.__cloudResult = rows.map(function (r) {
+				var d = new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ');
+				return d + '|' + r.room + '|' + r.mode + '|' + r.time;
+			}).join('\n');
+			window.__cloudReady = 1;
+		})
+		.catch(function (e) { window.__cloudResult = ''; window.__cloudReady = 1; });
+	}, initials);
+	// clang-format on
+	while (!emscripten_run_script_int("window.__cloudReady|0")) emscripten_sleep(50);
+	const char *res = emscripten_run_script_string("window.__cloudResult||''");
+	lua_pushstring(Ls, res ? res : "");
+#else
+	(void) initials;
+	lua_pushstring(Ls, "");
+#endif
+	return 1;
+}
+
 static void set_fn(const char *name, lua_CFunction fn) {
 	lua_pushcfunction(L, fn);
 	lua_setfield(L, -2, name);
@@ -157,6 +232,15 @@ static void open_vm(void) {
 	set_fn("now", l_host_now);
 	set_fn("log_load", l_host_log_load);
 	set_fn("log_save", l_host_log_save);
+	set_fn("cloud_submit", l_host_cloud_submit);
+	set_fn("cloud_fetch", l_host_cloud_fetch);
+	// host.cloud -- true only where cloud sync is available (the web build)
+#if defined(__EMSCRIPTEN__)
+	lua_pushboolean(L, 1);
+#else
+	lua_pushboolean(L, 0);
+#endif
+	lua_setfield(L, -2, "cloud");
 	lua_setglobal(L, "host");
 }
 
