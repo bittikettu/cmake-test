@@ -47,6 +47,10 @@ local builtins = {
 	{name = "dmesg", usage = "print kernel messages"},
 	{name = "service", usage = "control a daemon: service NAME start|status"},
 	{name = "sql", usage = "query the database (sql \\? for help)"},
+	{name = "ifconfig", usage = "show network interfaces"},
+	{name = "route", usage = "show the kernel routing table"},
+	{name = "ping", usage = "probe a host: ping HOST"},
+	{name = "telnet", usage = "connect to a host: telnet HOST [PORT]"},
 	{name = "unlock", usage = "try a code on the door: unlock CODE"},
 	{name = "clear", usage = "clear the screen"},
 	{name = "exit", usage = "give up (the door stays locked)"},
@@ -403,7 +407,7 @@ function verbs.service(args)
 	if name ~= room.svcName then host.print("service: unit '" .. name .. "' not found"); return end
 	local up = (S.flags & room.svcFlag) ~= 0
 	if action == "status" then
-		host.print(room.svcName .. ".service - cold storage inventory database")
+		host.print(room.svcName .. ".service - " .. (room.svcDesc or "cold storage inventory database"))
 		host.print("   active: " .. (up and "active (running)" or "inactive (dead)"))
 	elseif action == "stop" then
 		S.flags = S.flags & ~room.svcFlag
@@ -416,9 +420,13 @@ function verbs.service(args)
 			return
 		end
 		S.flags = S.flags | room.svcFlag
-		host.print(room.svcName .. ": starting database server ...")
-		host.print("  recovering write-ahead log ..... ok")
-		host.print("  database system is ready to accept connections")
+		if room.svcStartLines then
+			for _, l in ipairs(room.svcStartLines) do host.print(l) end
+		else
+			host.print(room.svcName .. ": starting database server ...")
+			host.print("  recovering write-ahead log ..... ok")
+			host.print("  database system is ready to accept connections")
+		end
 	else
 		host.print("service: unknown action '" .. action .. "'")
 	end
@@ -542,6 +550,91 @@ function verbs.mv(args)
 		return
 	end
 	host.print("mv: cannot move '" .. w[1] .. "': Read-only file system")
+end
+
+-- networking: generic verbs driven by room.net (this host) + room.hosts
+-- (who listens). Rooms without a net table get graceful "not configured" output.
+local function host_is_up(target)
+	local net = S.room and S.room.net
+	if not (net and net.up) then return false end
+	for _, h in ipairs(net.up) do if h == target then return true end end
+	return false
+end
+
+function verbs.ifconfig()
+	local net = S.room and S.room.net
+	if not net then host.print("ifconfig: no network interfaces configured"); return end
+	host.print((net.iface or "eth0") .. ": flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500")
+	host.print("        inet " .. net.ip .. "  netmask " .. (net.mask or "255.255.255.0") ..
+		"  broadcast " .. (net.bcast or "0.0.0.0"))
+	host.print("        ether " .. (net.mac or "00:00:00:00:00:00") .. "  txqueuelen 1000  (Ethernet)")
+	host.print("lo: flags=73<UP,LOOPBACK,RUNNING>  mtu 65536")
+	host.print("        inet 127.0.0.1  netmask 255.0.0.0")
+end
+
+function verbs.route()
+	local net = S.room and S.room.net
+	if not net then host.print("route: no routing table available"); return end
+	host.print("Kernel IP routing table")
+	host.print("Destination     Gateway         Genmask         Flags Iface")
+	host.print(string.format("0.0.0.0         %-15s 0.0.0.0         UG    %s",
+		net.gateway or "0.0.0.0", net.iface or "eth0"))
+	host.print(string.format("%-15s 0.0.0.0         %-15s U     %s",
+		net.network or "0.0.0.0", net.mask or "255.255.255.0", net.iface or "eth0"))
+end
+
+function verbs.ip(args)
+	local sub = words(args)[1] or ""
+	if sub:sub(1, 1) == "r" then verbs.route() else verbs.ifconfig() end
+end
+
+function verbs.ping(args)
+	local target, skip = nil, false
+	for _, t in ipairs(words(args)) do
+		if skip then skip = false
+		elseif t:sub(1, 1) == "-" then if t == "-c" then skip = true end
+		else target = t end
+	end
+	if not target then host.print("usage: ping HOST"); return end
+	host.print("PING " .. target .. " (" .. target .. ") 56(84) bytes of data.")
+	if host_is_up(target) then
+		for s = 1, 3 do
+			host.print("64 bytes from " .. target .. ": icmp_seq=" .. s ..
+				" ttl=64 time=" .. string.format("%.2f", host.rand(20, 90) / 100) .. " ms")
+		end
+		host.print("--- " .. target .. " ping statistics ---")
+		host.print("3 packets transmitted, 3 received, 0% packet loss")
+	else
+		host.print("--- " .. target .. " ping statistics ---")
+		host.print("3 packets transmitted, 0 received, 100% packet loss")
+	end
+end
+
+function verbs.telnet(args)
+	local target, port
+	for _, t in ipairs(words(args)) do
+		if t:sub(1, 1) == "-" then -- ignore options
+		elseif not target then target = t
+		elseif not port then port = tonumber(t) end
+	end
+	port = port or 23
+	if not target then host.print("usage: telnet HOST [PORT]"); return end
+	host.print("Trying " .. target .. "...")
+	if not host_is_up(target) then
+		host.print("telnet: Unable to connect to remote host: No route to host")
+		return
+	end
+	local h = (S.room.hosts or {})[target]
+	if not h or (h.port or 23) ~= port or h.refused then
+		host.print("telnet: connect to address " .. target .. ": Connection refused")
+		return
+	end
+	host.print("Connected to " .. target .. ".")
+	host.print("Escape character is '^]'.")
+	if h.banner then host.print(h.banner) end
+	local scr = h.screenPath and find_any(h.screenPath)
+	if scr and scr.content then host.print(scr.content) end
+	host.print("Connection closed by foreign host.")
 end
 
 function verbs.clear() host.clear() end
@@ -707,6 +800,30 @@ local function selftest()
 		game.submit("n00b")
 		assert(S.mode == "shell", "coldvault shell")
 		game.submit("ls")
+	end
+	-- Rack 9: the hard room. Full win exercising both gates + networking.
+	if (function() for _, r in ipairs(rooms) do if r.id == "rack9" then return true end end end)() then
+		reset_state()
+		game.start()
+		game.submit("rack9")
+		game.submit("n00b")
+		assert(S.mode == "shell", "rack9 shell")
+		game.submit("tar -xf backup.tar")
+		assert(find("/home/guest/docs/keyslip.b64"), "keyslip extracted")
+		game.submit("base64 -d docs/keyslip.b64")
+		game.submit("ifconfig")
+		game.submit("ping 10.0.0.2")
+		game.submit("telnet 10.0.0.2") -- warehouse controller: lower half
+		game.submit("mv /tmp/acld.policy /etc/acl/")
+		assert(find("/etc/acl/policy.conf"), "policy moved into place")
+		game.submit("service acld start")
+		assert((S.flags & 2) ~= 0, "acld service flag set")
+		game.submit("modprobe maglock_hv")
+		assert((S.flags & 1) ~= 0, "maglock_hv module flag set")
+		game.submit("unlock 0000") -- wrong code: must NOT win
+		assert(S.mode == "shell", "rack9 stays locked on wrong code")
+		game.submit("unlock " .. S.code) -- correct code + both gates
+		assert(S.mode == "win", "rack9 win after correct unlock")
 	end
 end
 
