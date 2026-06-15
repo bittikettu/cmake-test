@@ -87,6 +87,9 @@ if(EMSCRIPTEN)
     "-sUSE_GLFW=3"
     "-sALLOW_MEMORY_GROWTH=1"
     "-sASYNCIFY"
+    "-lidbfs.js"                          # IndexedDB-backed FS for the playthrough log
+    "-sFORCE_FILESYSTEM"                  # ensure the full FS API is present
+    "-sEXPORTED_RUNTIME_METHODS=FS,IDBFS" # reachable from EM_ASM in game_boot()
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/boot.mp3@boot.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/running.mp3@running.mp3"
     "SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/freesound_community-closing-metal-door-44280.mp3@freesound_community-closing-metal-door-44280.mp3"

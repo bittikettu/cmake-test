@@ -7,12 +7,20 @@
 #include "lua_rooms.h"
 
 #include <string.h>
+#include <time.h> // wall-clock stamp for the playthrough log (host.now)
 
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"
 #include "raylib.h" // LoadFileText/TraceLog/GetTime/GetRandomValue, MEMFS-safe on web
 #include "engine.h" // term_*, play_*, boot_start, b64encode, rot13_buf
+
+#if defined(__EMSCRIPTEN__)
+#include <emscripten/emscripten.h> // IDBFS persistence (mount + FS.syncfs)
+#define LOG_PATH "/save/vfd9000_playlog.txt"
+#else
+#define LOG_FILE "vfd9000_playlog.txt"
+#endif
 
 static lua_State *L = NULL;
 
@@ -66,6 +74,53 @@ static int l_host_rand(lua_State *Ls) {
 	return 1;
 }
 
+// host.now() -> "YYYY-MM-DD HH:MM" wall-clock stamp (the in-world clock is a
+// joke; the playthrough log wants the player's real date/time).
+static int l_host_now(lua_State *Ls) {
+	char buf[32] = "";
+	time_t t = time(NULL);
+	struct tm tmbuf;
+	struct tm *lt = NULL;
+#if defined(_WIN32)
+	if (localtime_s(&tmbuf, &t) == 0) lt = &tmbuf;
+#else
+	lt = localtime_r(&t, &tmbuf);
+#endif
+	if (lt) strftime(buf, sizeof buf, "%Y-%m-%d %H:%M", lt);
+	lua_pushstring(Ls, buf);
+	return 1;
+}
+
+// Resolve the playthrough-log path. Native: next to the exe. Web: the IDBFS
+// mount synced in game_boot().
+static const char *log_path(void) {
+#if defined(__EMSCRIPTEN__)
+	return LOG_PATH;
+#else
+	static char path[1024];
+	snprintf(path, sizeof path, "%s%s", GetApplicationDirectory(), LOG_FILE);
+	return path;
+#endif
+}
+
+// host.log_load() -> string  (the saved log text, or "" if none yet).
+static int l_host_log_load(lua_State *Ls) {
+	char *src = LoadFileText(log_path()); // NULL if missing -> ""
+	lua_pushstring(Ls, src ? src : "");
+	if (src) UnloadFileText(src);
+	return 1;
+}
+
+// host.log_save(text)  -- overwrite the log file, then (web) flush to IndexedDB.
+static int l_host_log_save(lua_State *Ls) {
+	const char *text = luaL_checkstring(Ls, 1);
+	SaveFileText(log_path(), (char *) text);
+#if defined(__EMSCRIPTEN__)
+	EM_ASM(FS.syncfs(false, function(e) {})); // fire-and-forget persist
+#endif
+	return 0;
+}
+
 static void set_fn(const char *name, lua_CFunction fn) {
 	lua_pushcfunction(L, fn);
 	lua_setfield(L, -2, name);
@@ -99,6 +154,9 @@ static void open_vm(void) {
 	set_fn("reboot", l_host_reboot);
 	set_fn("time", l_host_time);
 	set_fn("rand", l_host_rand);
+	set_fn("now", l_host_now);
+	set_fn("log_load", l_host_log_load);
+	set_fn("log_save", l_host_log_save);
 	lua_setglobal(L, "host");
 }
 
@@ -143,6 +201,19 @@ static void call_game_str(const char *name, char *out, int outsz) {
 // Public API
 //----------------------------------------------------------------------------
 void game_boot(void) {
+#if defined(__EMSCRIPTEN__)
+	// Mount IndexedDB-backed storage at /save and pull existing data in before
+	// anything reads the log. The blocking wait is safe here (ASYNCIFY is on and
+	// the browser main loop is not installed yet).
+	EM_ASM({
+		FS.mkdir('/save');
+		FS.mount(IDBFS, {}, '/save');
+		Module.__saveReady = 0;
+		FS.syncfs(true, function(err) { Module.__saveReady = 1; });
+	});
+	while (!emscripten_run_script_int("Module.__saveReady|0")) emscripten_sleep(16);
+#endif
+
 	open_vm();
 
 	char path[1024];

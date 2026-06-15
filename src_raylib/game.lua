@@ -52,6 +52,7 @@ local builtins = {
 	{name = "ping", usage = "probe a host: ping HOST"},
 	{name = "telnet", usage = "connect to a host: telnet HOST [PORT]"},
 	{name = "unlock", usage = "try a code on the door: unlock CODE"},
+	{name = "log", usage = "show your escape history (log clear wipes it)"},
 	{name = "clear", usage = "clear the screen"},
 	{name = "exit", usage = "give up (the door stays locked)"},
 	{name = "echo"}, {name = "whoami"}, {name = "date"},
@@ -524,11 +525,17 @@ function verbs.unlock(args)
 	host.play("open")
 	if room.winArt then host.print(room.winArt) end
 	local t = math.floor(host.time() - S.loginTime)
+	local timeStr
 	if t >= 3600 then
-		host.print(string.format("time to escape: %d:%02d:%02d", t // 3600, (t // 60) % 60, t % 60))
+		timeStr = string.format("%d:%02d:%02d", t // 3600, (t // 60) % 60, t % 60)
 	else
-		host.print(string.format("time to escape: %02d:%02d", t // 60, t % 60))
+		timeStr = string.format("%02d:%02d", t // 60, t % 60)
 	end
+	host.print("time to escape: " .. timeStr)
+	-- append this escape to the persistent playthrough log
+	local rec = host.now() .. "|" .. room.id .. "|" .. (S.hard and "l33t" or "n00b") ..
+		"|" .. timeStr
+	host.log_save((host.log_load() or "") .. rec .. "\n")
 	host.print("press ENTER to return to cartridge selection, or ESC to power off.")
 	S.mode = "win"
 end
@@ -550,6 +557,40 @@ function verbs.mv(args)
 		return
 	end
 	host.print("mv: cannot move '" .. w[1] .. "': Read-only file system")
+end
+
+-- playthrough log: parse the pipe-delimited records host.log_save wrote and
+-- render an aligned table (kept separate so the self-test can exercise the
+-- formatter without touching real persistence).
+local function render_log(text)
+	local out = {"PLAYTHROUGH LOG"}
+	local recs = {}
+	for line in (text .. "\n"):gmatch("(.-)\n") do
+		local date, room, mode, time = line:match("^(.-)|(.-)|(.-)|(.-)$")
+		if date then recs[#recs + 1] = {date, room, mode, time} end
+	end
+	if #recs == 0 then
+		out[#out + 1] = "no escapes recorded yet."
+		return out
+	end
+	local FMT = "%-16s  %-9s  %-4s  %s"
+	out[#out + 1] = string.format(FMT, "date", "room", "mode", "time")
+	out[#out + 1] = string.format(FMT, string.rep("-", 16), string.rep("-", 9),
+		string.rep("-", 4), string.rep("-", 5))
+	for _, r in ipairs(recs) do
+		out[#out + 1] = string.format(FMT, r[1], r[2], r[3], r[4])
+	end
+	out[#out + 1] = "(" .. #recs .. " escape" .. (#recs == 1 and "" or "s") .. ")"
+	return out
+end
+
+function verbs.log(args)
+	if words(args)[1] == "clear" then
+		host.log_save("")
+		host.print("playthrough log cleared.")
+		return
+	end
+	for _, line in ipairs(render_log(host.log_load() or "")) do host.print(line) end
 end
 
 -- networking: generic verbs driven by room.net (this host) + room.hosts
@@ -793,6 +834,13 @@ end
 
 local function selftest()
 	assert(#rooms >= 1, "at least one room")
+	-- the playthrough-log formatter renders records without touching persistence
+	do
+		local lines = render_log("2026-06-15 07:42|rack9|l33t|07:42\n")
+		assert(lines[1] == "PLAYTHROUGH LOG", "log header")
+		assert(lines[#lines] == "(1 escape)", "log counts one escape")
+		assert(render_log("")[2] == "no escapes recorded yet.", "empty log message")
+	end
 	-- full win on Cold Storage (simplest gate)
 	local has_cs = false
 	for _, r in ipairs(rooms) do if r.id == "coldstore" then has_cs = true end end
@@ -852,12 +900,18 @@ end
 
 function game.run_selftest()
 	local rp, rpl, rc, rplay = host.print, host.putline, host.clear, host.play
+	-- also stub persistence: the scripted wins must NOT touch the real log file
+	local rnow, rload, rsave = host.now, host.log_load, host.log_save
 	local sink = function() end
 	host.print, host.putline, host.clear, host.play = sink, sink, sink, sink
+	host.now = function() return "1970-01-01 00:00" end
+	host.log_load = function() return "" end
+	host.log_save = sink
 	local snap = snapshot_rooms()
 	local ok, err = pcall(selftest)
 	restore_rooms(snap)
 	reset_state()
 	host.print, host.putline, host.clear, host.play = rp, rpl, rc, rplay
+	host.now, host.log_load, host.log_save = rnow, rload, rsave
 	return ok and "PASS" or ("FAIL: " .. tostring(err))
 end
