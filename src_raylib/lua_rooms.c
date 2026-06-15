@@ -170,14 +170,14 @@ static int l_host_cloud_fetch(lua_State *Ls) {
 		var ini = UTF8ToString($0);
 		var url = window.SUPABASE_URL + '/rest/v1/escapes?initials=eq.'
 			+ encodeURIComponent(ini)
-			+ '&select=created_at,room,mode,time&order=created_at.desc&limit=50';
+			+ '&select=created_at,room,mode,time&order=created_at.desc&limit=10';
 		fetch(url, { headers: {
 			'apikey': window.SUPABASE_ANON_KEY,
 			'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY
 		} })
 		.then(function (r) { return r.json(); })
 		.then(function (rows) {
-			window.__cloudResult = rows.map(function (r) {
+			window.__cloudResult = rows.reverse().map(function (r) {
 				var d = new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ');
 				return d + '|' + r.room + '|' + r.mode + '|' + r.time;
 			}).join('\n');
@@ -191,6 +191,43 @@ static int l_host_cloud_fetch(lua_State *Ls) {
 	lua_pushstring(Ls, res ? res : "");
 #else
 	(void) initials;
+	lua_pushstring(Ls, "");
+#endif
+	return 1;
+}
+
+// host.cloud_recent() -> string  -- web-only: GET the 10 most recent escapes from
+// ALL players (the global log), oldest first, as "date|room|mode|time|initials"
+// lines so render_log can show a NAME column. This is the source the no-arg `log`
+// uses on web: the cloud is queried live every time, never a local cache.
+// "" on native or on any error/empty result.
+static int l_host_cloud_recent(lua_State *Ls) {
+#if defined(__EMSCRIPTEN__)
+	// clang-format off
+	EM_ASM({
+		window.__cloudReady = 0; window.__cloudResult = '';
+		if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) { window.__cloudReady = 1; return; }
+		var url = window.SUPABASE_URL + '/rest/v1/escapes'
+			+ '?select=created_at,room,mode,time,initials&order=created_at.desc&limit=10';
+		fetch(url, { headers: {
+			'apikey': window.SUPABASE_ANON_KEY,
+			'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY
+		} })
+		.then(function (r) { return r.json(); })
+		.then(function (rows) {
+			window.__cloudResult = rows.reverse().map(function (r) {
+				var d = new Date(r.created_at).toISOString().slice(0, 16).replace('T', ' ');
+				return d + '|' + r.room + '|' + r.mode + '|' + r.time + '|' + (r.initials || '');
+			}).join('\n');
+			window.__cloudReady = 1;
+		})
+		.catch(function (e) { window.__cloudResult = ''; window.__cloudReady = 1; });
+	});
+	// clang-format on
+	while (!emscripten_run_script_int("window.__cloudReady|0")) emscripten_sleep(50);
+	const char *res = emscripten_run_script_string("window.__cloudResult||''");
+	lua_pushstring(Ls, res ? res : "");
+#else
 	lua_pushstring(Ls, "");
 #endif
 	return 1;
@@ -234,6 +271,7 @@ static void open_vm(void) {
 	set_fn("log_save", l_host_log_save);
 	set_fn("cloud_submit", l_host_cloud_submit);
 	set_fn("cloud_fetch", l_host_cloud_fetch);
+	set_fn("cloud_recent", l_host_cloud_recent);
 	// host.cloud -- true only where cloud sync is available (the web build)
 #if defined(__EMSCRIPTEN__)
 	lua_pushboolean(L, 1);

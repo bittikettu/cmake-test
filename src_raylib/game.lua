@@ -573,19 +573,35 @@ local function render_log(text, title)
 	local out = {title or "PLAYTHROUGH LOG"}
 	local recs = {}
 	for line in (text .. "\n"):gmatch("(.-)\n") do
-		local date, room, mode, time = line:match("^(.-)|(.-)|(.-)|(.-)$")
-		if date then recs[#recs + 1] = {date, room, mode, time} end
+		-- records are "date|room|mode|time" and may carry a 5th "name" field
+		-- (the cloud global log tags each run with the player's initials)
+		local date, room, mode, time, name = line:match("^(.-)|(.-)|(.-)|(.-)|(.-)$")
+		if not date then date, room, mode, time = line:match("^(.-)|(.-)|(.-)|(.-)$") end
+		if date then recs[#recs + 1] = {date, room, mode, time, name} end
 	end
 	if #recs == 0 then
 		out[#out + 1] = "no escapes recorded yet."
 		return out
 	end
-	local FMT = "%-16s  %-9s  %-4s  %s"
-	out[#out + 1] = string.format(FMT, "date", "room", "mode", "time")
-	out[#out + 1] = string.format(FMT, string.rep("-", 16), string.rep("-", 9),
-		string.rep("-", 4), string.rep("-", 5))
-	for _, r in ipairs(recs) do
-		out[#out + 1] = string.format(FMT, r[1], r[2], r[3], r[4])
+	-- show only the 10 most recent runs (records arrive oldest-first)
+	while #recs > 10 do table.remove(recs, 1) end
+	if recs[1][5] then
+		-- with NAME column: player initials, clipped to 8 cols to stay tidy
+		local FMT = "%-8s  %-16s  %-9s  %-4s  %s"
+		out[#out + 1] = string.format(FMT, "name", "date", "room", "mode", "time")
+		out[#out + 1] = string.format(FMT, string.rep("-", 8), string.rep("-", 16),
+			string.rep("-", 9), string.rep("-", 4), string.rep("-", 5))
+		for _, r in ipairs(recs) do
+			out[#out + 1] = string.format(FMT, (r[5] or ""):sub(1, 8), r[1], r[2], r[3], r[4])
+		end
+	else
+		local FMT = "%-16s  %-9s  %-4s  %s"
+		out[#out + 1] = string.format(FMT, "date", "room", "mode", "time")
+		out[#out + 1] = string.format(FMT, string.rep("-", 16), string.rep("-", 9),
+			string.rep("-", 4), string.rep("-", 5))
+		for _, r in ipairs(recs) do
+			out[#out + 1] = string.format(FMT, r[1], r[2], r[3], r[4])
+		end
 	end
 	out[#out + 1] = "(" .. #recs .. " escape" .. (#recs == 1 and "" or "s") .. ")"
 	return out
@@ -619,7 +635,18 @@ function verbs.log(args)
 		for _, line in ipairs(render_log(text, "CLOUD LOG -- " .. ini)) do host.print(line) end
 		return
 	end
-	-- no arg: this device's local log
+	-- no arg: web always pulls the latest runs live from the cloud (never a local
+	-- cache); native shows this device's local log file.
+	if host.cloud then
+		host.print("querying cloud log ...")
+		local text = host.cloud_recent() or ""
+		if text == "" then
+			host.print("no cloud runs yet (or cloud unreachable).")
+			return
+		end
+		for _, line in ipairs(render_log(text, "CLOUD LOG -- LAST 10")) do host.print(line) end
+		return
+	end
 	for _, line in ipairs(render_log(host.log_load() or "")) do host.print(line) end
 end
 
@@ -900,6 +927,11 @@ local function selftest()
 		assert(lines[#lines] == "(1 escape)", "log counts one escape")
 		assert(render_log("")[2] == "no escapes recorded yet.", "empty log message")
 		assert(type(host.cloud_fetch("TST")) == "string", "cloud_fetch returns string")
+		assert(type(host.cloud_recent()) == "string", "cloud_recent returns string")
+		-- the global cloud log carries a 5th "name" field -> NAME column, 8-col clip
+		local named = render_log("2026-06-15 07:42|rack9|l33t|07:42|TOOLONGNAME\n", "CLOUD")
+		assert(named[2]:sub(1, 8) == "name    ", "name column header")
+		assert(named[4]:sub(1, 8) == "TOOLONGN", "name clipped to 8")
 	end
 	-- full win on Cold Storage (simplest gate)
 	local has_cs = false
@@ -963,7 +995,7 @@ function game.run_selftest()
 	-- also stub persistence + cloud: the scripted wins must NOT touch the real
 	-- log file or hit the network
 	local rnow, rload, rsave = host.now, host.log_load, host.log_save
-	local rsub, rfetch = host.cloud_submit, host.cloud_fetch
+	local rsub, rfetch, rrecent = host.cloud_submit, host.cloud_fetch, host.cloud_recent
 	local sink = function() end
 	host.print, host.putline, host.clear, host.play = sink, sink, sink, sink
 	host.now = function() return "1970-01-01 00:00" end
@@ -971,12 +1003,13 @@ function game.run_selftest()
 	host.log_save = sink
 	host.cloud_submit = sink
 	host.cloud_fetch = function() return "" end
+	host.cloud_recent = function() return "" end
 	local snap = snapshot_rooms()
 	local ok, err = pcall(selftest)
 	restore_rooms(snap)
 	reset_state()
 	host.print, host.putline, host.clear, host.play = rp, rpl, rc, rplay
 	host.now, host.log_load, host.log_save = rnow, rload, rsave
-	host.cloud_submit, host.cloud_fetch = rsub, rfetch
+	host.cloud_submit, host.cloud_fetch, host.cloud_recent = rsub, rfetch, rrecent
 	return ok and "PASS" or ("FAIL: " .. tostring(err))
 end
