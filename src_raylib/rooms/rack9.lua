@@ -176,6 +176,9 @@ DOOR CONTROL ....... HV MAGLOCK (ENERGIZED, LOCKED)]],
 
 	archivePrefix = "/home/guest/docs", -- tar -xf reveals everything under here
 
+	-- this site has no guided mode: l33t accounts only (see CLAUDE: pros only)
+	l33tOnly = true,
+
 	-- the door opens only with BOTH the kernel module AND the daemon up
 	winFlags = 3,
 

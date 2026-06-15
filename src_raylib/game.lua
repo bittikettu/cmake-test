@@ -668,7 +668,11 @@ local function load_room(room)
 	if room.gateLogPath then vfd.set_content(room.gateLogPath, room.gateLogBase) end
 	host.print(room.intro)
 	host.print("")
-	host.print("ACCOUNTS:  n00b (guided)    l33t (you are on your own)")
+	if room.l33tOnly then
+		host.print("ACCOUNTS:  l33t only -- no guided mode on this host")
+	else
+		host.print("ACCOUNTS:  n00b (guided)    l33t (you are on your own)")
+	end
 	host.print("")
 	S.mode = "login"
 end
@@ -687,8 +691,26 @@ local function do_select(line)
 	load_room(rooms[idx])
 end
 
+-- shown when a n00b tries to log in to an l33tOnly host (then coerced to l33t)
+local TROLL = [[
+         .-"""""""""""-.
+       .'   _     _     '.
+      /    / o \ / o \    \
+     |     \___/ \___/     |
+     |          ^          |
+     |    \           /    |
+     |     \ problem? /     |
+      \     '-------'     /
+       '.             .'
+         '-..._____.-'
+   only l33t here, n00b. *coercing to l33t*]]
+
 local function do_login(line)
 	host.putline("vfd-9000 login: " .. line)
+	if line == "n00b" and S.room.l33tOnly then
+		host.print(TROLL)
+		line = "l33t" -- fall through and log them in as l33t anyway
+	end
 	if line == "n00b" or line == "l33t" then
 		S.hard = (line:sub(1, 1) == "l")
 		if S.room.apply_difficulty then S.room.apply_difficulty(S.hard) end
@@ -806,8 +828,9 @@ local function selftest()
 		reset_state()
 		game.start()
 		game.submit("rack9")
-		game.submit("n00b")
-		assert(S.mode == "shell", "rack9 shell")
+		game.submit("n00b") -- l33tOnly: trollface, then coerced to l33t
+		assert(S.mode == "shell", "rack9 coerces n00b into a shell")
+		assert(S.hard, "rack9 n00b coerced to l33t")
 		game.submit("tar -xf backup.tar")
 		assert(find("/home/guest/docs/keyslip.b64"), "keyslip extracted")
 		game.submit("base64 -d docs/keyslip.b64")
