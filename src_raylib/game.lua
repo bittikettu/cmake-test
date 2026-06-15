@@ -777,6 +777,8 @@ end
 
 local function do_select(line)
 	host.putline("load cartridge: " .. line)
+	-- quick shortcut: "l" (or "log") shows the playthrough log without loading a room
+	if line == "l" or line == "log" then verbs.log(""); return end
 	local idx
 	if line:match("^%d$") then idx = tonumber(line) end
 	if not idx then
@@ -796,11 +798,11 @@ local TROLL = [[
       /    / o \ / o \    \
      |     \___/ \___/     |
      |          ^          |
-     |    \           /    |
-     |     \ problem? /     |
+     |                     |
+     |     \         /     |
       \     '-------'     /
-       '.             .'
-         '-..._____.-'
+       '.               .'
+         '-..._______.-'
    only l33t here, n00b. *coercing to l33t*]]
 
 local function do_login(line)
@@ -862,7 +864,7 @@ function game.start() -- called by the host once the boot animation finishes
 	host.print("SERVICE CARTRIDGES DETECTED:")
 	for i, r in ipairs(rooms) do host.print(string.format("  %d) %s", i, r.title)) end
 	host.print("")
-	host.print("insert a number and press ENTER.")
+	host.print("insert a number and press ENTER ('l' for the log).")
 end
 
 function game.submit(line)
@@ -939,6 +941,8 @@ local function selftest()
 	assert(has_cs, "coldstore present")
 	game.start()
 	assert(S.mode == "select", "select mode")
+	game.submit("l") -- 'l' shortcut shows the log and stays in selection
+	assert(S.mode == "select", "log shortcut keeps select mode")
 	game.submit("coldstore")
 	assert(S.mode == "login", "login after select")
 	game.submit("n00b")

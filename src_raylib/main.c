@@ -1126,9 +1126,11 @@ static void UpdateDrawFrame(void) {
 			draw_center("COLD STORAGE SYSTEMS", cy - 20, dim);
 			draw_center("PERSONAL TERMINAL UNIT", cy + 20, dim);
 			draw_center("MODEL VFD-9000", cy + 36, dim);
-			draw_center("(c) 1985", cy + 60, dim);
+			// git-derived firmware version (PROJECT_VERSION + describe hash)
+			draw_center("FIRMWARE v" PROJECT_VERSION "-" PROJECT_VERSION_HASH, cy + 56, dim);
+			draw_center("(c) 1985", cy + 76, dim);
 			if (splashTimer > 1.2f && fmodf(blink, 1.0f) < 0.6f)
-				draw_center("INITIALIZING ...", cy + 92, hot);
+				draw_center("INITIALIZING ...", cy + 100, hot);
 			// "POWERED BY [raylib]" attribution, tucked into the bottom-right
 			// corner and warmed in with the rest of the splash as the tube comes up.
 			{
