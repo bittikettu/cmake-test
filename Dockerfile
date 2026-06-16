@@ -32,11 +32,18 @@ ENV TZ=Europe/Helsinki
 # ============================================================================
 FROM emscripten/emsdk:3.1.64 AS webbuild
 WORKDIR /src
+# Firmware version: pass the host's `git describe` in so the bezel shows the real
+# version (recommended):
+#   docker build --build-arg GIT_VERSION="$(git describe --tags --always --dirty)" .
+# If omitted, the container falls back to its own git -- safe.directory below
+# lets it `describe` the root-owned tree instead of refusing and reporting 0.0.0.
+ARG GIT_VERSION=
 COPY . .
 # raylib is fetched and rebuilt for the browser (PLATFORM=Web set by
 # src_raylib/CMakeLists.txt when EMSCRIPTEN); boot.mp3 is packed into the
 # preload bundle. Output lands in build-web/src_raylib/index.{html,js,wasm,data}.
-RUN emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release \
+RUN git config --global --add safe.directory /src \
+    && emcmake cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release -DGIT_VERSION="${GIT_VERSION}" \
     && cmake --build build-web --parallel
 
 # ---- static file server for the generated site ----

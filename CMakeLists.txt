@@ -8,22 +8,37 @@ else()
     message("BUILD_PHASE does not have the expected value.")
     add_subdirectory(src_raylib)
 endif()
-execute_process(
-  COMMAND git describe --tags --always --dirty
-  OUTPUT_VARIABLE GIT_VERSION
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+# Firmware version comes from `git describe` at configure time. Prefer a value
+# passed in explicitly (-DGIT_VERSION=...): the Docker/WASM build sets this from
+# the host, because the container's git often refuses to `describe` the COPYed,
+# root-owned tree and would otherwise silently leave us at 0.0.0. Fall back to
+# asking git directly (the normal native build path).
+if(NOT GIT_VERSION)
+  execute_process(
+    COMMAND git describe --tags --always --dirty
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_VERSION
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+endif()
 
-string(REGEX MATCH "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)-([^\\.]*)$" VERSION_MATCH ${GIT_VERSION})
-if(VERSION_MATCH)
+# Tag form is vMAJOR.MINOR.PATCH with an optional describe suffix (-N-gHASH,
+# -dirty, or both). The suffix is optional so a clean checkout sitting exactly
+# on a tag still parses instead of dropping to 0.0.0.
+if(GIT_VERSION MATCHES "^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)(-(.+))?$")
   set(PROJECT_VERSION_MAJOR ${CMAKE_MATCH_1})
   set(PROJECT_VERSION_MINOR ${CMAKE_MATCH_2})
   set(PROJECT_VERSION_PATCH ${CMAKE_MATCH_3})
-  set(PROJECT_VERSION_HASH ${CMAKE_MATCH_4})
+  if(CMAKE_MATCH_5)
+    set(PROJECT_VERSION_HASH ${CMAKE_MATCH_5})
+  else()
+    set(PROJECT_VERSION_HASH "release")
+  endif()
 else()
   set(PROJECT_VERSION_MAJOR 0)
   set(PROJECT_VERSION_MINOR 0)
   set(PROJECT_VERSION_PATCH 0)
-  set(PROJECT_VERSION_HASH 0)
+  set(PROJECT_VERSION_HASH "unknown")
 endif()
 
 execute_process(

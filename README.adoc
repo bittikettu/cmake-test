@@ -18,6 +18,29 @@ authored as runtime-loaded Lua files, so new rooms need no engine changes. The
 project also doubles as a modular CMake scaffold (git-derived versioning, a
 `BUILD_PHASE` library/app switch).
 
+== Lore
+
+The *VFD-9000* was never meant to be the last thing you'd see. It was a cheap
+door-control terminal — one board, an 8 MHz CPU, a vacuum-fluorescent panel
+bright enough to read through freezer fog — bolted next to ten thousand doors
+across as many businesses. *Doorctl* watched the keypad, *autolock* slammed the
+bolt the moment a door swung shut, and a quiet line in every brochure promised
+that the firmware would "never fail safe in a way that compromises the
+premises." It failed safe by sealing you *in*.
+
+So the machines outlived their makers, and the doors kept locking. The cold
+stores of *Koivu & Sons* froze a careless guest out of daylight. *Helios
+Datacenter* dropped a high-voltage maglock across Cage 4 with a contractor
+still inside. *Vertex Softworks* wired its dev-floor exit to the build pipeline
+and forgot anyone might be working late. Each site rigged its own release ritual
+on top of the same stubborn terminal — a kernel module to coax, a daemon to
+revive, a database to interrogate, a code review to land — and each one left,
+somewhere on the disk, a half-finished note from the person who got out before
+you. Or didn't.
+
+There is always a way through the shell. The door always opens for the right
+four digits. The VFD-9000 keeps its promise — eventually.
+
 == Requirements
 
 * CMake (>= 3.20) and a build generator (Ninja).
@@ -79,12 +102,20 @@ The browser build is produced with Emscripten through Docker (see `Dockerfile`):
 
 [source,sh]
 ----
-docker build -t vfd-9000-web .            # full build, served by nginx
+# Pass the host's git version so the on-screen firmware version is correct
+# (the container's git can't read the COPYed tree's tags on its own).
+docker build --build-arg GIT_VERSION="$(git describe --tags --always --dirty)" \
+    -t vfd-9000-web .                     # full build, served by nginx
 docker run --rm -p 8080:80 vfd-9000-web   # -> http://localhost:8080
 ----
 
 It emits `index.{html,js,wasm,data}`; the rooms and audio are packed into the
 `.data` preload bundle and read from the in-memory filesystem at runtime.
+
+NOTE: The bezel firmware version is derived from `git describe` at configure
+time. In the browser build it is passed in via the `GIT_VERSION` build arg
+above; omit the arg and the container falls back to its own git (it marks the
+copied tree as a safe repository so it can still read the tags).
 
 == How to play
 

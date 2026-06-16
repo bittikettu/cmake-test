@@ -34,7 +34,10 @@ The **web / WASM build** goes through Docker (emscripten/emsdk 3.1.64), per the
 `Dockerfile` — there is no local emcc:
 
 ```sh
-docker build -t vfd-9000-web .              # full build, served by nginx
+# Pass GIT_VERSION from the host so the bezel firmware version is correct (the
+# container's git can't `describe` the COPYed tree's tags by itself).
+docker build --build-arg GIT_VERSION="$(git describe --tags --always --dirty)" \
+    -t vfd-9000-web .                       # full build, served by nginx
 docker run --rm -p 8080:80 vfd-9000-web     # -> http://localhost:8080
 docker build --target webbuild -t vfd-web . # just compile-check the wasm
 ```
@@ -67,7 +70,11 @@ success signal.
 
 `PROJECT_VERSION` is derived from `git describe --tags` at configure time and
 written into `version.h` (from `version.h.in`). It is shown on the bezel via
-`PROJECT_VERSION`. Tag format expected: `vMAJOR.MINOR.PATCH-...`.
+`PROJECT_VERSION`. Tag format expected: `vMAJOR.MINOR.PATCH` with an optional
+describe suffix. The top-level `CMakeLists.txt` accepts `-DGIT_VERSION=...` to
+override the describe call; the Docker/WASM build uses this (via the
+`GIT_VERSION` build arg) because the container's git won't otherwise read the
+root-owned, COPYed tree — without it the bezel falls back to `0.0.0`.
 
 ## Architecture (the important part)
 

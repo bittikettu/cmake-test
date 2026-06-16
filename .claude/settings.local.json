@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/work/gitrepos/cmake-test//**)",
+      "Read(//c/work/gitrepos/cmake-test/build/**)",
+      "Read(//c/work/gitrepos/cmake-test/**)",
+      "Bash(cmake --build /c/work/gitrepos/cmake-test/build/local_application_release)",
+      "PowerShell($p = Start-Process -FilePath \"C:\\\\work\\\\gitrepos\\\\cmake-test\\\\build\\\\local_application_release\\\\src_raylib\\\\modular_cmake-raylib-app.exe\" -PassThru; Start-Sleep -Seconds 6; if \\($p.HasExited\\) { \"EXITED with code $\\($p.ExitCode\\)\" } else { \"RUNNING pid $\\($p.Id\\)\" })",
+      "PowerShell(Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait\\(\"help{ENTER}\"\\); Start-Sleep -Milliseconds 500; [System.Windows.Forms.SendKeys]::SendWait\\(\"ls -a{ENTER}\"\\); Start-Sleep -Milliseconds 500; Add-Type -AssemblyName System.Drawing; $b = New-Object System.Drawing.Bitmap 1920,1080; $g = [System.Drawing.Graphics]::FromImage\\($b\\); $g.CopyFromScreen\\(0,0,0,0,$b.Size\\); $b.Save\\(\"C:\\\\work\\\\gitrepos\\\\cmake-test\\\\build\\\\vfd_shot.png\"\\); $g.Dispose\\(\\); $b.Dispose\\(\\); \"saved\")",
+      "Read(//c/work/gitrepos/cmake-test/.github/**)",
+      "Bash(docker --version)",
+      "Bash(docker info *)",
+      "PowerShell(docker run *)",
+      "WebSearch",
+      "Bash(mkdir -p /c/work/gitrepos/cmake-test/src_raylib/resources)",
+      "Read(//c/work/gitrepos/cmake-test/src_raylib/**)",
+      "Bash(curl -sL -o VT323-Regular.ttf https://github.com/google/fonts/raw/main/ofl/vt323/VT323-Regular.ttf)",
+      "Bash(curl -sL -o OFL.txt https://raw.githubusercontent.com/google/fonts/main/ofl/vt323/OFL.txt)",
+      "Bash(xxd -v)",
+      "Bash(xxd -i VT323-Regular.ttf)",
+      "PowerShell(Stop-Process *)",
+      "PowerShell(Get-Process *)",
+      "Bash(cmake --build build/local_application_release)",
+      "Bash(git log *)",
+      "Bash(cmake --preset local_application_release)",
+      "Read(//tmp/**)",
+      "Bash(cat)",
+      "Bash(cmake -P /tmp/vtest.cmake)",
+      "Bash(python -c \"import yaml,sys; [yaml.safe_load\\(open\\(f\\)\\) and print\\(f,'OK'\\) for f in ['.github/workflows/deploy-web.yml','.github/workflows/release.yml']]\")"
+    ]
+  }
+}
