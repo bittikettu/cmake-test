@@ -26,6 +26,7 @@ local S = {
 	cwd = "/home/guest",
 	loginTime = 0,
 	wrongTries = 0,
+	staged = false, -- git: has the changed file been `git add`ed yet
 }
 
 local rooms = {} -- registry, in load order
@@ -47,6 +48,8 @@ local builtins = {
 	{name = "dmesg", usage = "print kernel messages"},
 	{name = "service", usage = "control a daemon: service NAME start|status"},
 	{name = "sql", usage = "query the database (sql \\? for help)"},
+	{name = "git", usage = "version control: git status|branch|diff|add FILE"},
+	{name = "arc", usage = "send a diff for review: arc diff (arc help)"},
 	{name = "ifconfig", usage = "show network interfaces"},
 	{name = "route", usage = "show the kernel routing table"},
 	{name = "ping", usage = "probe a host: ping HOST"},
@@ -222,6 +225,29 @@ local function words(s)
 	local w = {}
 	for x in s:gmatch("%S+") do w[#w + 1] = x end
 	return w
+end
+
+-- like words(), but honours single/double quotes so a flag value with spaces
+-- ('--summary "fix the bug"') stays one token. Used by the git/arc verbs.
+local function tokenize(s)
+	local t, i, n = {}, 1, #s
+	while i <= n do
+		local c = s:sub(i, i)
+		if c:match("%s") then
+			i = i + 1
+		elseif c == '"' or c == "'" then
+			local j = i + 1
+			while j <= n and s:sub(j, j) ~= c do j = j + 1 end
+			t[#t + 1] = s:sub(i + 1, j - 1)
+			i = j + 1
+		else
+			local j = i
+			while j <= n and not s:sub(j, j):match("[%s'\"]") do j = j + 1 end
+			t[#t + 1] = s:sub(i, j - 1)
+			i = j
+		end
+	end
+	return t
 end
 
 -- verbs ---------------------------------------------------------------------
@@ -566,6 +592,167 @@ function verbs.mv(args)
 	host.print("mv: cannot move '" .. w[1] .. "': Read-only file system")
 end
 
+-- git / arc: a Phabricator arcanist review flow. Both are generic verbs driven
+-- by the active room's git*/arc* fields; a room without them gets the usual
+-- "not a git repository" / "no .arcconfig" refusals. The puzzle: stage the one
+-- changed file (git add), then `arc diff` it with a Summary, the src/ code owner
+-- as Reviewer, and the right Maniphest task -- the door bot answers a clean
+-- revision with the release PIN. See rooms/arcrev.lua.
+local function repo_rel(room, path) -- path made relative to the repo working copy
+	local base = room.repoPath or ""
+	if base ~= "" and path:sub(1, #base + 1) == base .. "/" then
+		return path:sub(#base + 2)
+	end
+	return path
+end
+
+function verbs.git(args)
+	local room = S.room
+	if not (room and room.gitTask) then
+		host.print("fatal: not a git repository (or any parent up to /): .git")
+		return
+	end
+	local t = tokenize(args)
+	local sub = t[1] or ""
+	local changedRel = repo_rel(room, room.gitChanged or "")
+	if sub == "status" or sub == "st" then
+		host.print("On branch " .. room.gitBranch)
+		if S.staged then
+			host.print("Changes to be committed:")
+			host.print('  (use "git restore --staged <file>..." to unstage)')
+			host.print("        modified:   " .. changedRel)
+		else
+			host.print("Changes not staged for commit:")
+			host.print('  (use "git add <file>..." to update what will be committed)')
+			host.print("        modified:   " .. changedRel)
+			host.print("")
+			host.print('no changes added to commit (use "git add")')
+		end
+	elseif sub == "branch" then
+		host.print("* " .. room.gitBranch)
+		host.print("  main")
+	elseif sub == "log" then
+		host.print("commit " .. (room.gitCommit or "9f1c2ab") .. " (HEAD -> " .. room.gitBranch .. ")")
+		host.print("Author: " .. (room.gitAuthor or "you <you@localhost>"))
+		host.print("Date:   Mon Jun 15 18:40:11 2026 +0000")
+		host.print("")
+		host.print("    WIP: " .. (room.gitSubject or "patch in progress"))
+	elseif sub == "diff" then
+		if room.gitDiff then host.print(room.gitDiff)
+		else host.print("(no textual diff available)") end
+	elseif sub == "add" then
+		local target = t[2]
+		if not target then host.print("Nothing specified, nothing added."); return end
+		if target == "." or target == "-A" or target == "--all" or target == "-a" then
+			S.staged = true
+			return
+		end
+		local p = resolve(target)
+		if p == room.gitChanged then
+			S.staged = true -- silent on success, like the real git add
+		elseif find(p) then
+			-- a tracked but unmodified file: git stages nothing and says nothing
+		else
+			host.print("fatal: pathspec '" .. target .. "' did not match any files")
+		end
+	elseif sub == "commit" then
+		host.print("git: pushing commits is disabled here -- send the change")
+		host.print("     for review with 'arc diff' instead.")
+	elseif sub == "" then
+		host.print("usage: git status|branch|log|diff|add FILE")
+	else
+		host.print("git: '" .. sub .. "' is not supported here (status, branch, add)")
+	end
+end
+
+function verbs.arc(args)
+	local room = S.room
+	if not (room and room.gitTask) then
+		host.print("arc: no '.arcconfig' found -- not an arcanist working copy.")
+		return
+	end
+	local t = tokenize(args)
+	local sub = t[1]
+	if not sub or sub == "help" or sub == "--help" then
+		host.print("arc -- arcanist (Phabricator) command line")
+		host.print("  arc diff   send your staged change for review:")
+		host.print('    --summary   "<one-line summary>"')
+		host.print("    --reviewers <user[,user]>")
+		host.print("    --task      <T-number this change fixes>")
+		return
+	end
+	if sub ~= "diff" then
+		host.print("arc: unknown command '" .. sub .. "' (try: arc diff)")
+		return
+	end
+	-- collect --flag <value> pairs from the rest of the line
+	local opts, i = {}, 2
+	while i <= #t do
+		local key = t[i]:match("^%-%-([%w%-]+)$") or t[i]:match("^%-(%a)$")
+		if key then opts[key] = t[i + 1] or ""; i = i + 2 else i = i + 1 end
+	end
+	if not S.staged then
+		host.print("arc: no staged changes found in the working copy.")
+		host.print("     stage your edit first:  git add <file>")
+		return
+	end
+	local summary = opts.summary or opts.s
+	local reviewers = opts.reviewers or opts.reviewer or opts.r
+	local task = opts.task or opts.t
+	local missing = {}
+	if not summary or summary == "" then missing[#missing + 1] = "Summary" end
+	if not reviewers or reviewers == "" then missing[#missing + 1] = "Reviewers" end
+	if not task or task == "" then missing[#missing + 1] = "Maniphest Tasks" end
+	if #missing > 0 then
+		host.print("arc: the differential message is missing required field(s):")
+		host.print("       " .. table.concat(missing, ", "))
+		if not S.hard then
+			host.print('     try:  arc diff --summary ".." --reviewers <u> --task T..')
+		end
+		return
+	end
+	if task ~= room.gitTask then
+		host.print("arc: task " .. task .. " is not the task this branch resolves.")
+		if not S.hard then host.print("     the task id is in the branch name (git branch).") end
+		return
+	end
+	local ok_rev = false
+	for r in (reviewers .. ","):gmatch("([^,%s]+)") do
+		if r == room.arcReviewer then ok_rev = true end
+	end
+	if not ok_rev then
+		host.print("arc: Herald rule H7 blocks this revision: changes under")
+		if S.hard then
+			host.print("     src/ must be reviewed by the code owner (repo policy).")
+		else
+			host.print("     src/ must be reviewed by " .. room.arcReviewer ..
+				" (docs/REVIEW_POLICY.txt).")
+		end
+		return
+	end
+	-- accepted: echo the assembled differential message, then the server reply
+	host.print("Linting............ OK")
+	host.print("Unit tests......... OK")
+	host.print("Uploading patch to " .. (room.arcServer or "phabricator") .. " ...")
+	host.print("")
+	host.print("--- DIFFERENTIAL MESSAGE -------------------------------")
+	host.print(summary)
+	host.print("")
+	host.print("Summary: " .. summary)
+	host.print("Reviewers: " .. reviewers)
+	host.print("Maniphest Tasks: " .. task)
+	host.print("--------------------------------------------------------")
+	host.print("")
+	host.print("Created a new Differential revision:")
+	host.print("        Revision URI: " .. (room.arcServer or "https://phab") ..
+		"/D" .. host.rand(2000, 4999))
+	host.print("")
+	host.print("phabricator: review request accepted; " .. room.arcReviewer .. " notified.")
+	host.print("doorbot: a clean revision for " .. task .. " landed. release authorised.")
+	host.print("doorbot: DOOR PIN -> " .. S.code)
+	S.flags = S.flags | room.arcFlag
+end
+
 -- playthrough log: parse the pipe-delimited records host.log_save wrote and
 -- render an aligned table (kept separate so the self-test can exercise the
 -- formatter without touching real persistence).
@@ -761,6 +948,7 @@ local function load_room(room)
 	S.room = room
 	S.flags = 0
 	S.wrongTries = 0
+	S.staged = false
 	S.cwd = "/home/guest"
 	S.code = tostring(host.rand(1000, 9999)) -- re-rolled every load; 1000+ avoids leading zero
 	if room.gateLogPath then vfd.set_content(room.gateLogPath, room.gateLogBase) end
@@ -908,6 +1096,7 @@ local function reset_state()
 	S.mode, S.room, S.flags = "boot", nil, 0
 	S.code, S.hard, S.user = "0000", false, "guest"
 	S.cwd, S.loginTime, S.wrongTries = "/home/guest", 0, 0
+	S.staged = false
 end
 
 -- after a winning unlock the web build asks for initials before the win screen;
@@ -991,6 +1180,37 @@ local function selftest()
 		assert(S.mode == "shell", "rack9 stays locked on wrong code")
 		game.submit("unlock " .. S.code) -- correct code + both gates
 		finish_win("rack9 win after correct unlock")
+	end
+	-- Review Gate: the arcanist room. Full win -- stage the fix, send a
+	-- well-formed diff (Summary + correct reviewer + correct task), read the
+	-- PIN the door bot returns, unlock. Also checks each rejection path.
+	local arcroom
+	for _, r in ipairs(rooms) do if r.id == "arcrev" then arcroom = r end end
+	if arcroom then
+		reset_state()
+		game.start()
+		game.submit("arcrev")
+		game.submit("n00b")
+		assert(S.mode == "shell", "arcrev shell")
+		game.submit("cd project")
+		game.submit("git status")
+		game.submit("git branch") -- the task lives in the branch name
+		game.submit('arc diff --summary "x" --reviewers ' .. arcroom.arcReviewer ..
+			" --task " .. arcroom.gitTask) -- nothing staged yet -> rejected
+		assert((S.flags & 1) == 0, "arc rejects an unstaged change")
+		game.submit("git add src/auth.c")
+		assert(S.staged, "auth.c is staged")
+		game.submit('arc diff --summary "fix it" --reviewers nobody --task ' .. arcroom.gitTask)
+		assert((S.flags & 1) == 0, "arc rejects the wrong reviewer")
+		game.submit('arc diff --summary "fix it" --reviewers ' .. arcroom.arcReviewer .. " --task T000000")
+		assert((S.flags & 1) == 0, "arc rejects the wrong task")
+		game.submit('arc diff --summary "fix it" --reviewers ' .. arcroom.arcReviewer ..
+			" --task " .. arcroom.gitTask)
+		assert((S.flags & 1) ~= 0, "arc accepts a well-formed diff")
+		game.submit("unlock 0000") -- wrong code: must NOT win
+		assert(S.mode == "shell", "arcrev stays locked on wrong code")
+		game.submit("unlock " .. S.code)
+		finish_win("arcrev win after correct unlock")
 	end
 end
 

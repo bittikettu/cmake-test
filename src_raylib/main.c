@@ -45,7 +45,7 @@
 #define VISROWS 20 // scrollback rows shown above the input line
 
 #define MAX_LINES 400
-#define INPUT_MAX 48
+#define INPUT_MAX 160 // a typed line can outrun the 64-col display; it scrolls
 #define HIST_MAX 16
 
 // Host-local buffer sizes / limits.
@@ -1176,7 +1176,20 @@ static void UpdateDrawFrame(void) {
 		if (state == STATE_SHELL && strcmp(game_mode(), "win") != 0 && scrollOff == 0 && !printing) {
 			char prompt[PROMPT_BUF], lineBuf[COLS + 1];
 			game_prompt(prompt, sizeof prompt);
-			snprintf(lineBuf, sizeof lineBuf, "%s%s", prompt, input);
+			// The editor only appends/backspaces, so the cursor is always at the
+			// tail. When prompt+input would overflow one 64-col row, scroll the
+			// input horizontally so its tail (and the cursor) stay visible,
+			// reserving the last cell for the cursor block.
+			int promptLen = (int) strlen(prompt);
+			int room = COLS - promptLen - 1;
+			if (room < 1) room = 1;
+			const char *vis = input;
+			int shownLen = inputLen;
+			if (inputLen > room) {
+				vis = input + (inputLen - room);
+				shownLen = room;
+			}
+			snprintf(lineBuf, sizeof lineBuf, "%s%.*s", prompt, shownLen, vis);
 			draw_mono(lineBuf, PAD_X, inputY, PHOSPHOR);
 			if (fmodf(blink, 1.0f) < 0.55f)
 				DrawRectangle(PAD_X + (int) strlen(lineBuf) * CELL_W, inputY + 1, CELL_W - 1, CELL_H - 2, PHOSPHOR);
